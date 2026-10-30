@@ -80,6 +80,10 @@ th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
 .scroll-x{overflow-x:auto}
 .scroll-x input,.scroll-x select{padding:8px;font-size:16px;min-width:70px}
 .adminbar{position:sticky;top:-18px;background:var(--card);padding:8px 0 10px;z-index:2;display:flex;gap:8px;justify-content:space-between;align-items:center;border-bottom:2px solid var(--line);margin-bottom:12px}
+.billgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;align-items:start}
+.bill.open{border-color:var(--accent);border-top-width:8px}
+.btn.big{font-size:20px;padding:14px}
+header .btn.navon{background:#fff;color:#111827;border-color:#fff}
 @media (max-width:520px){.grid{grid-template-columns:repeat(2,1fr)}.item .name{font-size:17px}.tab{font-size:17px;padding:10px 14px}}
 </style>
 </head>
@@ -87,6 +91,7 @@ th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
 <header>
   <h1>🍳 POS System <span class="status" id="src"></span></h1>
   <div class="hbtns">
+    <button class="btn" id="navOrder">🧾 <span data-t="New order"></span></button>
     <button class="btn warn" id="btnBills">📋 <span data-t="Open bills"></span> <span class="badge" id="billBadge">0</span></button>
     <button class="btn" id="btnStaff">👥 <span data-t="Staff"></span></button>
     <button class="btn" id="btnHist">📊 <span data-t="Sales history"></span></button>
@@ -96,7 +101,7 @@ th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
   </div>
 </header>
 
-<main>
+<main id="orderView">
   <section class="panel">
     <div class="hint">① <span data-t="Pick a category"></span> &nbsp;→&nbsp; ② <span data-t="Tap a menu"></span> &nbsp;→&nbsp; ③ <span data-t="Save the bill"></span> &nbsp;→&nbsp; ④ <span data-t="Pay when ready"></span></div>
     <div class="tabs" id="tabs"></div>
@@ -121,6 +126,14 @@ th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
   </aside>
 </main>
 
+<main id="billsView" style="display:none;grid-template-columns:1fr">
+  <section class="panel">
+    <h2 style="margin:0 0 4px;font-size:26px">📋 <span data-t="Open bills"></span> <span class="badge" id="billsCount" style="background:var(--accent);color:#fff">0</span></h2>
+    <div class="status" style="margin-bottom:12px">Unpaid bills · press <b>Pay</b> when the customer is ready</div>
+    <div class="billgrid" id="billsBody"></div>
+  </section>
+</main>
+
 <div id="toast"></div>
 
 <!-- Option modal -->
@@ -139,12 +152,6 @@ th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
     <button class="btn" style="flex:1" onclick="closeModals()"><span data-t="Cancel"></span></button>
     <button class="btn primary" style="flex:2" id="oiAdd"><span data-t="Add to order"></span></button>
   </div>
-</div></div>
-
-<!-- Open bills modal -->
-<div class="modal-bg" id="billsModal"><div class="modal" style="max-width:640px;max-height:90vh;overflow:auto">
-  <h3>📋 <span data-t="Open bills"></span></h3><div id="billsBody"></div>
-  <button class="btn" style="margin-top:6px;width:100%" onclick="closeModals()"><span data-t="Close"></span></button>
 </div></div>
 
 <!-- Pay modal -->
@@ -222,7 +229,7 @@ document.querySelectorAll('.modal-bg').forEach(m=>m.onclick=e=>{ if(e.target===m
 // English is the main language. Mizo labels are filled in from Admin > Languages
 // (or the "Labels" sheet of menu.xlsx). Any label left blank falls back to English.
 const KEYS = [
- 'Open bills','Staff','Sales history','Export sales (.xlsx)',
+ 'Open bills','New order','Waiting','min','Staff','Sales history','Export sales (.xlsx)',
  'Pick a category','Tap a menu','Save the bill','Pay when ready',
  'Stir-fry','Soup','Salad','Mizo Foods','Drink','Open item','Pork','Chicken','Seafood',
  'choose meat','choose option','Custom price','Order','Clear','Order taken by','No items yet','Total',
@@ -445,27 +452,41 @@ function saveBill(payNow){
   if(i>=0) bills[i]=bill; else bills.push(bill);
   save('pos_bills',bills);
   cart=[]; $('note').value=''; editingNo=null;
-  render(); updateBadge(); toast('✅ '+t('Bill saved')+' #'+n);
+  render(); updateBadge(); toast('✅ '+t('Bill saved')+' #'+n+(payNow?'':' → '+t('Open bills')));
   if(payNow) openPay(n);
 }
 $('btnSave').onclick = ()=>saveBill(false);
 $('btnSavePay').onclick = ()=>saveBill(true);
 
-// ====================== Open bills ======================
+// ====================== Open bills (page) ======================
+let view = 'order';
+function setView(v){
+  view = v;
+  $('orderView').style.display = v==='order' ? '' : 'none';
+  $('billsView').style.display = v==='bills' ? '' : 'none';
+  $('navOrder').classList.toggle('navon', v==='order');
+  $('btnBills').classList.toggle('navon', v==='bills');
+  if(v==='bills') renderBills();
+}
+$('navOrder').onclick = ()=>setView('order');
+$('btnBills').onclick = ()=>setView('bills');
+function waitMin(b){ const t0 = new Date(b.created.replace(' ','T')); return Math.max(0, Math.round((Date.now()-t0)/60000)); }
 function renderBills(){
   const list = bills.filter(b=>b.status==='open').sort((a,b)=>a.no-b.no);
+  $('billsCount').textContent = list.length;
   $('billsBody').innerHTML = list.length ? list.map(b=>`
-    <div class="bill">
-      <div class="bh"><b>#${b.no} · ${escH(b.created.slice(11,16))}</b><b>${money(billTotal(b))}</b></div>
-      <div class="status">${escH(t('Order by'))}: ${escH(b.orderBy||'-')}${b.note?' · 📝 '+escH(b.note):''}</div>
+    <div class="bill open">
+      <div class="bh"><b style="font-size:24px">#${b.no}</b><span class="status">${escH(b.created.slice(11,16))} · ${escH(t('Waiting'))} ${waitMin(b)} ${escH(t('min'))}</span></div>
+      <div class="status" style="margin-top:2px">${escH(t('Order by'))}: <b>${escH(b.orderBy||'-')}</b>${b.note?' · 📝 '+escH(b.note):''}</div>
       <table style="margin-top:6px">${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}</td><td>${l.qty} × ${money(l.unit)}</td><td style="text-align:right">${money(l.qty*l.unit)}</td></tr>`).join('')}</table>
+      <div class="total small"><span>${escH(t('Total'))}</span><span style="color:var(--accent)">${money(billTotal(b))}</span></div>
       <div class="acts">
-        <button class="btn ok" data-pay="${b.no}">💰 ${escH(t('Pay'))}</button>
+        <button class="btn ok big" data-pay="${b.no}" style="flex:2 1 100%">💰 ${escH(t('Pay'))}</button>
         <button class="btn" data-edit="${b.no}">✏️ ${escH(t('Edit'))}</button>
         <button class="btn" data-void="${b.no}" style="color:#c92a2a">❌ ${escH(t('Cancel bill'))}</button>
       </div>
-    </div>`).join('') : `<div class="status" style="padding:12px 0">${escH(t('No open bills'))}</div>`;
-  $('billsBody').querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>{ $('billsModal').style.display='none'; openPay(Number(b.dataset.pay)); });
+    </div>`).join('') : `<div class="status" style="padding:12px 0;font-size:18px">${escH(t('No open bills'))}</div>`;
+  $('billsBody').querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>openPay(Number(b.dataset.pay)));
   $('billsBody').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editBill(Number(b.dataset.edit)));
   $('billsBody').querySelectorAll('[data-void]').forEach(b=>b.onclick=()=>{
     const n = Number(b.dataset.void);
@@ -481,9 +502,9 @@ function editBill(n){
   cart = b.lines.map(l=>({...l,key:l.code+'|'+l.option+'|'+l.unit+'|'+l.name}));
   editingNo = n; $('note').value = b.note||'';
   if([...$('selTaker').options].some(o=>o.value===b.orderBy)) $('selTaker').value = b.orderBy;
-  rememberSel(); closeModals(); renderCart();
+  rememberSel(); closeModals(); setView('order'); renderCart();
 }
-$('btnBills').onclick = ()=>{ renderBills(); $('billsModal').style.display='flex'; };
+setInterval(()=>{ if(view==='bills') renderBills(); }, 30000);
 
 // ====================== Pay ======================
 function openPay(n){
@@ -518,7 +539,7 @@ $('btnConfirmPay').onclick = ()=>{
   b.cash = payMethod==='Cash' ? (parseFloat($('cash').value)||0) : null;
   rememberSel(); save('pos_bills',bills);
   if(editingNo===b.no){ cart=[]; editingNo=null; $('note').value=''; }
-  printReceipt(b); closeModals(); render(); updateBadge(); toast('✅ '+t('Bill paid')+' #'+b.no);
+  printReceipt(b); closeModals(); render(); updateBadge(); if(view==='bills') renderBills(); toast('✅ '+t('Bill paid')+' #'+b.no);
 };
 function printReceipt(b){
   const w = window.open('','_blank','width=320,height=600'); if(!w) return;
@@ -556,8 +577,10 @@ function renderHistory(){
          <div class="status" style="margin-top:4px">${escH(t('Order by'))}: ${escH(b.orderBy||'-')} · ${escH(t('Cashier'))}: ${escH(b.cashier||'-')}${b.note?' · 📝 '+escH(b.note):''}</div>
          <table style="margin-top:6px"><tr><th>${escH(t('Item'))}</th><th>${escH(t('Qty'))}</th><th>${escH(t('Price'))}</th><th>${escH(t('Total'))}</th></tr>
          ${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}<br><small class="status">${escH(l.code)}</small></td><td>${l.qty}</td><td>${money(l.unit)}</td><td>${money(l.unit*l.qty)}</td></tr>`).join('')}</table>
+       ${b.status==='open'?`<button class="btn ok" data-hpay="${b.no}" style="margin:8px 0;width:100%">💰 ${escH(t('Pay'))}</button>`:''}
        </details>`).join('')}`;
   $('histSel').onchange = e=>{ histDay=e.target.value; renderHistory(); };
+  $('histBody').querySelectorAll('[data-hpay]').forEach(b=>b.onclick=()=>{ closeModals(); openPay(Number(b.dataset.hpay)); });
 }
 $('btnHist').onclick = ()=>{ histDay=null; renderHistory(); $('histModal').style.display='flex'; };
 
@@ -765,6 +788,7 @@ $('adminSave').onclick = ()=>{
   render(); closeModals(); toast('✅ Saved');
 };
 
+setView('order');
 autoLoad();
 </script>
 </body>
