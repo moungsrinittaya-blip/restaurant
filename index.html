@@ -89,7 +89,7 @@ header .btn.navon{background:#fff;color:#111827;border-color:#fff}
 </head>
 <body>
 <header>
-  <h1>🍳 POS System <span class="status" id="src"></span></h1>
+  <h1>🍳 POS System <span class="status" id="src"></span> <span class="status" id="syncDot" style="cursor:pointer;margin-left:6px;color:#fff;font-weight:bold" title="Click to sync now"></span></h1>
   <div class="hbtns">
     <button class="btn" id="navOrder">🧾 <span data-t="New order"></span></button>
     <button class="btn warn" id="btnBills">📋 <span data-t="Open bills"></span> <span class="badge" id="billBadge">0</span></button>
@@ -225,6 +225,109 @@ function toast(msg){ const el=$('toast'); el.textContent=msg; el.style.display='
 function closeModals(){ document.querySelectorAll('.modal-bg').forEach(m=>m.style.display='none'); }
 document.querySelectorAll('.modal-bg').forEach(m=>m.onclick=e=>{ if(e.target===m) m.style.display='none'; });
 
+
+// ====================== Cloud sync (Google Sheets via Apps Script) ======================
+function applySetupLink(){
+  const m = location.hash.match(/^#setup=(.+)$/); if(!m) return false;
+  try{ const o = JSON.parse(atob(decodeURIComponent(m[1]))); if(o.u && o.k) save('pos_sync',{url:o.u,key:o.k}); }catch(e){}
+  try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){}
+  return true;
+}
+applySetupLink();
+window.addEventListener('hashchange',()=>{ if(applySetupLink()) location.reload(); });
+let sync = load('pos_sync',null);          // {url,key} or null = local only
+let outbox = load('pos_outbox',[]);        // ids of bills waiting to be pushed
+let lastPull = load('pos_lastpull',0);
+let menuDirty = load('pos_menu_dirty',false);
+let staffDirty = load('pos_staff_dirty',false);
+function markStaff(){ if(!sync) return; staffDirty = true; save('pos_staff_dirty',true); kickSync(); }
+let syncBusy = false, syncErr = '';
+function newId(){ return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2,10); }
+function queueBill(id){ if(!outbox.includes(id)){ outbox.push(id); save('pos_outbox',outbox); } }
+function dequeue(id){ outbox = outbox.filter(x=>x!==id); save('pos_outbox',outbox); }
+function touchBill(b){ b.rev = (b.rev||0)+1; queueBill(b.id); }
+function setSyncState(){
+  const el = $('syncDot'); if(!el) return;
+  if(!sync){ el.textContent='⚪ Local only'; el.title='Not connected to Google Sheets (Admin → Google Sheets sync)'; return; }
+  if(syncErr){ el.textContent='🔴 '+(navigator.onLine?'Sync error':'Offline')+(outbox.length?' · '+outbox.length+' waiting':''); el.title=syncErr; return; }
+  el.textContent = outbox.length ? '🟡 '+outbox.length+' waiting' : '🟢 Synced'; el.title='Click to sync now';
+}
+async function api(action,payload,method){
+  if(!sync) throw new Error('Not connected');
+  const ctrl = new AbortController(), to = setTimeout(()=>ctrl.abort(),15000);
+  try{
+    let res;
+    if(method==='POST'){
+      res = await fetch(sync.url+'?action='+encodeURIComponent(action),{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body:JSON.stringify(Object.assign({action,key:sync.key},payload||{})),signal:ctrl.signal});
+    } else {
+      const q = new URLSearchParams(Object.assign({action,key:sync.key,_:Date.now()},payload||{}));
+      res = await fetch(sync.url+'?'+q.toString(),{signal:ctrl.signal});
+    }
+    const j = await res.json();
+    if(j.error) throw new Error(j.error);
+    return j;
+  } finally { clearTimeout(to); }
+}
+async function allocateNo(){
+  if(sync){ try{ const r = await api('nextNo',{},'POST'); if(r.no){ save('pos_counter',Math.max(load('pos_counter',0),r.no)); return r.no; } }catch(e){} }
+  const n = nextNo(); save('pos_counter',n); return n;
+}
+function adoptServerBill(sb){
+  const i = bills.findIndex(b=>b.id===sb.id);
+  if(i<0){ bills.push(sb); return true; }
+  const lb = bills[i];
+  if(sb.rev>lb.rev || (lb.status==='open' && sb.status!=='open')){ bills[i]=sb; dequeue(sb.id); return true; }
+  return false;
+}
+async function flushOutbox(){
+  for(const id of [...outbox]){
+    const b = bills.find(x=>x.id===id); if(!b){ dequeue(id); continue; }
+    const sent = b.rev;
+    const r = await api('upsertBill',{bill:b},'POST');
+    if(r.rejected){ if(r.bill) adoptServerBill(r.bill); dequeue(id); save('pos_bills',bills); }
+    else if(b.rev===sent) dequeue(id);
+  }
+}
+async function pullBills(){
+  const r = await api('bills',{since:lastPull},'GET');
+  let changed = false;
+  (r.bills||[]).forEach(sb=>{ if(adoptServerBill(sb)) changed = true; });
+  lastPull = Math.max(0,(r.serverTime||Date.now())-3000); save('pos_lastpull',lastPull);
+  if(changed){
+    save('pos_bills',bills); save('pos_counter',Math.max(load('pos_counter',0),...bills.map(b=>b.no||0)));
+    updateBadge(); if(view==='bills') renderBills();
+  }
+}
+async function loadSheetMenu(){
+  if(menuDirty) return 'dirty';
+  const r = await api('menu',{},'GET');
+  if(!r.menu || !r.menu.length) return 'empty';
+  menu = r.menu; if(r.options && r.options.length) options = r.options;
+  fileLabels = r.labels||{}; localLabels = {}; save('pos_labels',localLabels);
+  if(!staffDirty && r.staff && r.staff.takers && r.staff.takers.length && r.staff.cashiers && r.staff.cashiers.length){ staff = r.staff; renderStaffSelects(); }
+  save('pos_menu_cache',{menu,options,labels:fileLabels});
+  return 'ok';
+}
+async function pushMenu(){
+  mergeLabels();
+  await api('saveMenu',{menu,options,labels},'POST');
+  menuDirty = false; save('pos_menu_dirty',false);
+  save('pos_menu_cache',{menu,options,labels:fileLabels});
+}
+async function syncNow(){
+  if(!sync || syncBusy) return;
+  syncBusy = true;
+  try{ if(menuDirty) await pushMenu();
+    if(staffDirty){ await api('saveStaff',{staff},'POST'); staffDirty=false; save('pos_staff_dirty',false); }
+    await flushOutbox(); await pullBills(); syncErr=''; }
+  catch(e){ syncErr = String((e&&e.message)||e); }
+  finally{ syncBusy = false; setSyncState(); }
+}
+function kickSync(){ setSyncState(); setTimeout(syncNow,50); }
+setInterval(syncNow,10000);
+window.addEventListener('online',()=>syncNow());
+
 // ====================== Languages ======================
 // English is the main language. Mizo labels are filled in from Admin > Languages
 // (or the "Labels" sheet of menu.xlsx). Any label left blank falls back to English.
@@ -300,7 +403,7 @@ const catIcon = k => (CAT[k]||{i:''}).i;
 const OPT_ICON = {pork:'🐷',chicken:'🐔',seafood:'🦐'};
 
 let menu = DEFAULT_MENU, options = DEFAULT_OPTIONS;
-let cart = [], activeTab = 'Stir-fry', editingNo = null, payNo = null, payMethod = 'Cash';
+let cart = [], activeTab = 'Stir-fry', editingId = null, payId = null, payMethod = 'Cash';
 
 // ====================== Bills storage (+ migrate old flat sales) ======================
 let bills = load('pos_bills',[]);
@@ -317,8 +420,9 @@ let bills = load('pos_bills',[]);
   }
   save('pos_migrated',true);
 })();
+bills.forEach(b=>{ if(!b.id) b.id = newId(); if(!b.rev) b.rev = 1; }); save('pos_bills',bills);
 const billTotal = b => b.lines.reduce((s,l)=>s+l.unit*l.qty,0);
-const nextNo = () => load('pos_counter',0)+1;
+const nextNo = () => Math.max(load('pos_counter',0), ...bills.map(b=>b.no||0)) + 1;
 function updateBadge(){ $('billBadge').textContent = bills.filter(b=>b.status==='open').length; }
 
 // ====================== Excel I/O ======================
@@ -365,6 +469,14 @@ async function autoLoad(){
   let src = 'built-in default';
   if(fileWb){ const r = parseWorkbook(fileWb); fileLabels = r.labels; menu = r.menu; options = r.options; src = 'menu.xlsx'; }
   if(saved){ menu = saved.menu; options = saved.options; src = 'edited in Admin'; }
+  if(sync){
+    try{ const st = await loadSheetMenu();
+      src = st==='ok' ? 'Google Sheet' : st==='dirty' ? 'edited in Admin (uploading…)' : 'Google Sheet is empty → Admin → Push menu to sheet';
+    }catch(e){
+      const c = load('pos_menu_cache',null);
+      if(c){ menu=c.menu; options=c.options; fileLabels=c.labels||{}; src='Google Sheet (offline copy)'; }
+    }
+  }
   $('src').textContent = '· menu: ' + src;
   mergeLabels(); applyLang();
 }
@@ -435,25 +547,35 @@ function renderCart(){
   const tt = cart.reduce((s,c)=>s+c.unit*c.qty,0);
   $('total').textContent = money(tt);
   $('btnSave').disabled = $('btnSavePay').disabled = !cart.length;
-  $('orderNo').textContent = '#' + (editingNo || nextNo()) + (editingNo ? ' ✏️' : '');
+  const eb = editingId && bills.find(b=>b.id===editingId);
+  $('orderNo').textContent = eb ? '#'+eb.no+' ✏️' : (sync ? '(new)' : '#'+nextNo());
 }
-$('btnClear').onclick = ()=>{ cart=[]; $('note').value=''; editingNo=null; renderCart(); };
+$('btnClear').onclick = ()=>{ cart=[]; $('note').value=''; editingId=null; renderCart(); };
 
 // ====================== Save bill (unpaid) ======================
-function saveBill(payNow){
-  if(!cart.length) return;
-  let n = editingNo, created = stamp();
-  if(n){ const old = bills.find(b=>b.no===n); if(old) created = old.created; }
-  else { n = nextNo(); save('pos_counter',n); }
-  const bill = {no:n,created,status:'open',orderBy:$('selTaker').value,note:$('note').value.trim(),
-    lines:cart.map(c=>({code:c.code,name:c.name,option:c.option,qty:c.qty,unit:c.unit,cat:c.cat})),
-    payment:'',cashier:'',cash:null,paidAt:''};
-  const i = bills.findIndex(b=>b.no===n);
-  if(i>=0) bills[i]=bill; else bills.push(bill);
-  save('pos_bills',bills);
-  cart=[]; $('note').value=''; editingNo=null;
-  render(); updateBadge(); toast('✅ '+t('Bill saved')+' #'+n+(payNow?'':' → '+t('Open bills')));
-  if(payNow) openPay(n);
+let saving = false;
+async function saveBill(payNow){
+  if(!cart.length || saving) return;
+  saving = true; $('btnSave').disabled = $('btnSavePay').disabled = true;
+  try{
+    const lines = cart.map(c=>({code:c.code,name:c.name,option:c.option,qty:c.qty,unit:c.unit,cat:c.cat}));
+    const orderBy = $('selTaker').value, note = $('note').value.trim();
+    let bill;
+    if(editingId){
+      const old = bills.find(b=>b.id===editingId);
+      if(!old || old.status!=='open'){ alert('This bill was already paid or cancelled (maybe on another device).'); cart=[]; editingId=null; $('note').value=''; render(); return; }
+      Object.assign(old,{lines,orderBy,note}); bill = old; touchBill(bill);
+    } else {
+      const no = await allocateNo();
+      bill = {id:newId(),no,created:stamp(),status:'open',orderBy,note,lines,payment:'',cashier:'',cash:null,paidAt:'',rev:1};
+      bills.push(bill); queueBill(bill.id);
+    }
+    save('pos_bills',bills);
+    cart=[]; $('note').value=''; editingId=null;
+    render(); updateBadge(); toast('✅ '+t('Bill saved')+' #'+bill.no+(payNow?'':' → '+t('Open bills')));
+    kickSync();
+    if(payNow) openPay(bill.id);
+  } finally { saving = false; renderCart(); }
 }
 $('btnSave').onclick = ()=>saveBill(false);
 $('btnSavePay').onclick = ()=>saveBill(true);
@@ -481,37 +603,37 @@ function renderBills(){
       <table style="margin-top:6px">${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}</td><td>${l.qty} × ${money(l.unit)}</td><td style="text-align:right">${money(l.qty*l.unit)}</td></tr>`).join('')}</table>
       <div class="total small"><span>${escH(t('Total'))}</span><span style="color:var(--accent)">${money(billTotal(b))}</span></div>
       <div class="acts">
-        <button class="btn ok big" data-pay="${b.no}" style="flex:2 1 100%">💰 ${escH(t('Pay'))}</button>
-        <button class="btn" data-edit="${b.no}">✏️ ${escH(t('Edit'))}</button>
-        <button class="btn" data-void="${b.no}" style="color:#c92a2a">❌ ${escH(t('Cancel bill'))}</button>
+        <button class="btn ok big" data-pay="${escH(b.id)}" style="flex:2 1 100%">💰 ${escH(t('Pay'))}</button>
+        <button class="btn" data-edit="${escH(b.id)}">✏️ ${escH(t('Edit'))}</button>
+        <button class="btn" data-void="${escH(b.id)}" style="color:#c92a2a">❌ ${escH(t('Cancel bill'))}</button>
       </div>
     </div>`).join('') : `<div class="status" style="padding:12px 0;font-size:18px">${escH(t('No open bills'))}</div>`;
-  $('billsBody').querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>openPay(Number(b.dataset.pay)));
-  $('billsBody').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editBill(Number(b.dataset.edit)));
+  $('billsBody').querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>openPay(b.dataset.pay));
+  $('billsBody').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editBill(b.dataset.edit));
   $('billsBody').querySelectorAll('[data-void]').forEach(b=>b.onclick=()=>{
-    const n = Number(b.dataset.void);
-    if(!confirm('Cancel bill #'+n+'? It will be kept in history as Void.')) return;
-    const bl = bills.find(x=>x.no===n); if(bl){ bl.status='void'; save('pos_bills',bills); }
-    if(editingNo===n){ cart=[]; editingNo=null; $('note').value=''; }
-    renderBills(); updateBadge(); renderCart();
+    const bl = bills.find(x=>x.id===b.dataset.void); if(!bl) return;
+    if(!confirm('Cancel bill #'+bl.no+'? It will be kept in history as Void.')) return;
+    bl.status='void'; touchBill(bl); save('pos_bills',bills);
+    if(editingId===bl.id){ cart=[]; editingId=null; $('note').value=''; }
+    renderBills(); updateBadge(); renderCart(); kickSync();
   });
 }
-function editBill(n){
-  const b = bills.find(x=>x.no===n); if(!b) return;
-  if(cart.length && !confirm('Replace the current order on screen with bill #'+n+'?')) return;
+function editBill(id){
+  const b = bills.find(x=>x.id===id); if(!b) return;
+  if(cart.length && !confirm('Replace the current order on screen with bill #'+b.no+'?')) return;
   cart = b.lines.map(l=>({...l,key:l.code+'|'+l.option+'|'+l.unit+'|'+l.name}));
-  editingNo = n; $('note').value = b.note||'';
+  editingId = id; $('note').value = b.note||'';
   if([...$('selTaker').options].some(o=>o.value===b.orderBy)) $('selTaker').value = b.orderBy;
   rememberSel(); closeModals(); setView('order'); renderCart();
 }
 setInterval(()=>{ if(view==='bills') renderBills(); }, 30000);
 
 // ====================== Pay ======================
-function openPay(n){
-  const b = bills.find(x=>x.no===n); if(!b||b.status!=='open') return;
-  payNo = n; payMethod = 'Cash';
+function openPay(id){
+  const b = bills.find(x=>x.id===id); if(!b||b.status!=='open') return;
+  payId = id; payMethod = 'Cash';
   document.querySelectorAll('#payTabs .tab').forEach(x=>x.classList.toggle('active',x.dataset.p==='Cash'));
-  $('payTitle').textContent = '💰 ' + t('Pay Bill') + ' #' + n;
+  $('payTitle').textContent = '💰 ' + t('Pay Bill') + ' #' + b.no;
   $('paySummary').innerHTML = `<div class="status">${escH(t('Order by'))}: ${escH(b.orderBy||'-')}${b.note?' · 📝 '+escH(b.note):''}</div>
     <table style="margin-top:6px">${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}</td><td>${l.qty} × ${money(l.unit)}</td><td style="text-align:right">${money(l.qty*l.unit)}</td></tr>`).join('')}</table>`;
   $('payTotal').textContent = money(billTotal(b));
@@ -520,7 +642,7 @@ function openPay(n){
   updatePay(); $('payModal').style.display='flex';
 }
 function updatePay(){
-  const b = bills.find(x=>x.no===payNo); if(!b) return;
+  const b = bills.find(x=>x.id===payId); if(!b) return;
   const tt = billTotal(b), cash = parseFloat($('cash').value)||0;
   $('cashBox').style.display = payMethod==='Cash' ? 'block' : 'none';
   $('change').textContent = money(Math.max(0,cash-tt));
@@ -532,14 +654,15 @@ document.querySelectorAll('#payTabs .tab').forEach(b=>b.onclick=()=>{
   updatePay();
 });
 $('cash').oninput = updatePay;
-$('btnExact').onclick = ()=>{ const b = bills.find(x=>x.no===payNo); if(b){ $('cash').value = billTotal(b); updatePay(); } };
+$('btnExact').onclick = ()=>{ const b = bills.find(x=>x.id===payId); if(b){ $('cash').value = billTotal(b); updatePay(); } };
 $('btnConfirmPay').onclick = ()=>{
-  const b = bills.find(x=>x.no===payNo); if(!b) return;
+  const b = bills.find(x=>x.id===payId); if(!b||b.status!=='open') return;
   b.status='paid'; b.paidAt=stamp(); b.payment=payMethod; b.cashier=$('selCashier').value;
   b.cash = payMethod==='Cash' ? (parseFloat($('cash').value)||0) : null;
-  rememberSel(); save('pos_bills',bills);
-  if(editingNo===b.no){ cart=[]; editingNo=null; $('note').value=''; }
-  printReceipt(b); closeModals(); render(); updateBadge(); if(view==='bills') renderBills(); toast('✅ '+t('Bill paid')+' #'+b.no);
+  touchBill(b); rememberSel(); save('pos_bills',bills);
+  if(editingId===b.id){ cart=[]; editingId=null; $('note').value=''; }
+  printReceipt(b); closeModals(); render(); updateBadge(); if(view==='bills') renderBills();
+  toast('✅ '+t('Bill paid')+' #'+b.no); kickSync();
 };
 function printReceipt(b){
   const w = window.open('','_blank','width=320,height=600'); if(!w) return;
@@ -577,10 +700,10 @@ function renderHistory(){
          <div class="status" style="margin-top:4px">${escH(t('Order by'))}: ${escH(b.orderBy||'-')} · ${escH(t('Cashier'))}: ${escH(b.cashier||'-')}${b.note?' · 📝 '+escH(b.note):''}</div>
          <table style="margin-top:6px"><tr><th>${escH(t('Item'))}</th><th>${escH(t('Qty'))}</th><th>${escH(t('Price'))}</th><th>${escH(t('Total'))}</th></tr>
          ${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}<br><small class="status">${escH(l.code)}</small></td><td>${l.qty}</td><td>${money(l.unit)}</td><td>${money(l.unit*l.qty)}</td></tr>`).join('')}</table>
-       ${b.status==='open'?`<button class="btn ok" data-hpay="${b.no}" style="margin:8px 0;width:100%">💰 ${escH(t('Pay'))}</button>`:''}
+       ${b.status==='open'?`<button class="btn ok" data-hpay="${escH(b.id)}" style="margin:8px 0;width:100%">💰 ${escH(t('Pay'))}</button>`:''}
        </details>`).join('')}`;
   $('histSel').onchange = e=>{ histDay=e.target.value; renderHistory(); };
-  $('histBody').querySelectorAll('[data-hpay]').forEach(b=>b.onclick=()=>{ closeModals(); openPay(Number(b.dataset.hpay)); });
+  $('histBody').querySelectorAll('[data-hpay]').forEach(b=>b.onclick=()=>{ closeModals(); openPay(b.dataset.hpay); });
 }
 $('btnHist').onclick = ()=>{ histDay=null; renderHistory(); $('histModal').style.display='flex'; };
 
@@ -619,12 +742,12 @@ function renderStaffModal(){
   $('staffBody').querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{
     const list = staff[b.dataset.k];
     if(list.length<=1) return alert('At least one name is required');
-    list.splice(b.dataset.i,1); renderStaffSelects(); renderStaffModal();
+    list.splice(b.dataset.i,1); renderStaffSelects(); renderStaffModal(); markStaff();
   });
   const addName = k=>{
     const name = $('add_'+k).value.trim(); if(!name) return;
     if(staff[k].some(x=>x.toLowerCase()===name.toLowerCase())) return alert('This name already exists');
-    staff[k].push(name); renderStaffSelects(); renderStaffModal(); $('add_'+k).focus();
+    staff[k].push(name); renderStaffSelects(); renderStaffModal(); $('add_'+k).focus(); markStaff();
   };
   $('staffBody').querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>addName(b.dataset.add));
   $('staffBody').querySelectorAll('input[type=text]').forEach(i=>i.onkeydown=e=>{ if(e.key==='Enter') addName(i.id.slice(4)); });
@@ -647,12 +770,75 @@ function checkPin(){
 $('pinOk').onclick = checkPin;
 $('pinInput').onkeydown = e=>{ if(e.key==='Enter') checkPin(); };
 
+let syncDraft = {url:'',key:''};
 function openAdmin(){
+  syncDraft = {url:(sync&&sync.url)||'', key:(sync&&sync.key)||''};
   draft = JSON.parse(JSON.stringify(menu));
   draftOpts = JSON.parse(JSON.stringify(options));
   draftLabels = {}; allLabelKeys().forEach(k=>{ draftLabels[k] = labels[k]||''; });
   renderAdmin(); $('adminModal').style.display='flex';
 }
+function syncSectionHtml(){
+  return `<div class="asec"><h4>☁️ Google Sheets sync (menu + bills in real time)</h4>
+   <div class="status" style="margin-bottom:8px">Status: <b>${escH($('syncDot').textContent)}</b>${syncErr?' · '+escH(syncErr):''}${menuDirty?' · menu waiting to upload':''}</div>
+   <label style="margin-top:0">Web App URL</label>
+   <input type="text" value="${escH(syncDraft.url)}" data-row="sync" data-f="url" placeholder="https://script.google.com/macros/s/.../exec">
+   <label>Key (Setup tab, cell B1 of your Google Sheet)</label>
+   <input type="password" value="${escH(syncDraft.key)}" data-row="sync" data-f="key" autocomplete="off">
+   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+     <button class="btn ok" id="sSave">🔗 Save &amp; connect</button>
+     <button class="btn" id="sTest">🧪 Test connection</button>
+     <button class="btn" id="sPush">⬆️ Push menu to sheet</button>
+     <button class="btn" id="sPull">⬇️ Load menu from sheet</button>
+     <button class="btn" id="sBills">⬆️ Push all bills</button>
+     <button class="btn" id="sLink">📋 Copy device setup link</button>
+     <button class="btn danger" id="sOff">Disconnect</button>
+   </div>
+   <div class="status" style="margin-top:8px">Menu is read from the sheet (tabs Menu / Variants / Options / Labels). Every bill is written to tabs Bills and Lines. Devices refresh about every 10 seconds.</div>
+  </div>`;
+}
+const SYNC_ACTIONS = {
+  sSave: async ()=>{
+    const url = (syncDraft.url||'').trim(), key = (syncDraft.key||'').trim();
+    if(!/^https:\/\//.test(url) || !key) return alert('Enter the Web App URL (https://...) and the Key.');
+    const old = sync; sync = {url,key};
+    try{
+      await api('ping',{},'GET');
+      save('pos_sync',sync); syncErr='';
+      bills.forEach(b=>queueBill(b.id));
+      const st = await loadSheetMenu();
+      markStaff();
+      if(st==='empty' && confirm('Connected! The sheet menu is empty. Upload this device\'s menu to the sheet now?')) await pushMenu();
+      else if(st==='ok'){ mergeLabels(); render(); $('src').textContent='· menu: Google Sheet'; }
+      toast('☁️ Connected'); kickSync(); renderAdmin();
+    }catch(e){ sync = old; alert('Could not connect: '+e.message+'\n\nCheck the URL (must end with /exec), the Key, and that the deployment access is "Anyone".'); }
+  },
+  sTest: async ()=>{
+    const url = (syncDraft.url||'').trim(), key = (syncDraft.key||'').trim(); const old = sync; sync = {url,key};
+    try{ await api('ping',{},'GET'); alert('✅ Connection OK'); }catch(e){ alert('❌ '+e.message); } finally{ sync = old; }
+  },
+  sPush: async ()=>{
+    if(!sync) return alert('Connect first.');
+    if(!confirm('Overwrite the Google Sheet menu with the menu saved on this device?')) return;
+    try{ await pushMenu(); toast('☁️ Menu uploaded'); setSyncState(); }catch(e){ alert('Failed: '+e.message); }
+  },
+  sPull: async ()=>{
+    if(!sync) return alert('Connect first.');
+    try{ menuDirty=false; save('pos_menu_dirty',false); const st = await loadSheetMenu();
+      if(st==='ok'){ mergeLabels(); render(); $('src').textContent='· menu: Google Sheet'; toast('⬇️ Menu loaded from sheet'); openAdmin(); } else alert('The sheet has no menu rows yet.');
+    }catch(e){ alert('Failed: '+e.message); }
+  },
+  sBills: ()=>{ if(!sync) return alert('Connect first.'); bills.forEach(b=>queueBill(b.id)); kickSync(); toast('Uploading '+bills.length+' bills…'); },
+  sLink: async ()=>{
+    if(!sync) return alert('Connect first.');
+    const link = location.origin+location.pathname+'#setup='+encodeURIComponent(btoa(JSON.stringify({u:sync.url,k:sync.key})));
+    try{ await navigator.clipboard.writeText(link); toast('📋 Link copied - open it on the other device'); }catch(e){ prompt('Copy this link and open it on the other device:',link); }
+  },
+  sOff: ()=>{
+    if(!confirm('Disconnect from Google Sheets? Bills stay on this device.')) return;
+    sync = null; localStorage.removeItem('pos_sync'); syncErr=''; setSyncState(); renderAdmin();
+  }
+};
 function variantsToText(m){ return (m.variants||[]).map(v=>v.name+'='+v.price).join(', '); }
 function parseVariants(txt){
   return txt.split(/[,|;]+/).map(x=>x.trim()).filter(Boolean).map(x=>{
@@ -663,6 +849,7 @@ function parseVariants(txt){
 }
 function renderAdmin(){
   $('adminBody').innerHTML = `
+  ${syncSectionHtml()}
   <div class="asec"><h4>🍽️ Menu items <span class="status">(${draft.length}) · blank name = empty slot (hidden on the order screen)</span></h4>
     <div class="status" style="margin-bottom:8px"><b>Variants</b> give each choice its own price, e.g. <i>Small=250, Large=350</i>. If Variants are filled in, they replace the Pork / Chicken / Seafood choice. Price = the "from" price shown on the card.</div>
     <div class="scroll-x"><table>
@@ -722,6 +909,7 @@ function adminInput(e){
   else if(row==='o'){ const o = draftOpts[el.dataset.i], f = el.dataset.f;
     o[f] = f==='extra' ? (parseFloat(el.value)||0) : el.value; }
   else if(row==='lab'){ draftLabels[el.dataset.k] = el.value; }
+  else if(row==='sync'){ syncDraft[el.dataset.f] = el.value.trim(); }
 }
 $('adminBody').addEventListener('input',adminInput);
 $('adminBody').addEventListener('change',adminInput);
@@ -754,8 +942,10 @@ $('adminBody').addEventListener('click',e=>{
   } else if(b.id==='setPin'){
     const p = $('newPin').value.trim(); if(p.length<4) return alert('PIN must be at least 4 characters');
     save('pos_pin',p); $('newPin').value=''; toast('PIN updated');
+  } else if(b.id && SYNC_ACTIONS[b.id]){ SYNC_ACTIONS[b.id]();
   } else if(b.id==='clearHist'){
-    if(confirm('Delete ALL bills and sales history? Export to Excel first!')){ bills=[]; save('pos_bills',[]); save('pos_counter',0); save('pos_sales',[]); cart=[]; editingNo=null; updateBadge(); renderCart(); toast('History deleted'); }
+    const msg = sync ? 'Delete the bills stored on THIS device only? The Google Sheet is NOT cleared - delete those rows in the sheet yourself. Export first!' : 'Delete ALL bills and sales history? Export to Excel first!';
+    if(confirm(msg)){ bills=[]; outbox=[]; save('pos_outbox',[]); save('pos_bills',[]); save('pos_counter',0); save('pos_sales',[]); lastPull=Date.now(); save('pos_lastpull',lastPull); cart=[]; editingId=null; updateBadge(); renderCart(); toast('History deleted'); }
   }
 });
 function mergeDraftLabels(){ labels = Object.assign({}, labels); Object.entries(draftLabels).forEach(([k,v])=>{ v=v.trim(); if(v) labels[k]=v; else delete labels[k]; }); }
@@ -767,6 +957,7 @@ $('file').onchange = async e=>{
   Object.assign(localLabels, r.labels); save('pos_labels',localLabels); mergeLabels();
   $('src').textContent = '· menu: edited in Admin'; e.target.value='';
   render(); openAdmin(); toast('Menu imported');
+  if(sync){ menuDirty = true; save('pos_menu_dirty',true); pushMenu().catch(()=>{}); }
 };
 $('adminSave').onclick = ()=>{
   const codes = new Set();
@@ -786,10 +977,18 @@ $('adminSave').onclick = ()=>{
   save('pos_labels',localLabels); mergeLabels();
   $('src').textContent = '· menu: edited in Admin';
   render(); closeModals(); toast('✅ Saved');
+  if(sync){ menuDirty = true; save('pos_menu_dirty',true);
+    pushMenu().then(()=>{ toast('☁️ Menu saved to Google Sheet'); setSyncState(); }).catch(()=>toast('⚠️ Saved on this device - will upload when online')); }
 };
 
 setView('order');
-autoLoad();
+$('syncDot').onclick = syncNow;
+setSyncState();
+setInterval(async()=>{   // pick up menu edits made in the sheet
+  if(!sync || menuDirty || $('adminModal').style.display==='flex') return;
+  try{ if(await loadSheetMenu()==='ok'){ mergeLabels(); render(); } }catch(e){}
+}, 60000);
+autoLoad().then(()=>setTimeout(syncNow,300));
 </script>
 </body>
 </html>
