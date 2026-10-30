@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POS System</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#e9ecf1;--card:#ffffff;--text:#111827;--muted:#374151;--line:#b8bfcb;--ok:#2b8a3e;--accent:#e8590c;--blue:#1971c2}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#1a1d24;--text:#f3f4f6;--muted:#c4c9d3;--line:#454b57}}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text);font-size:17px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 16px;background:#1f2937;color:#fff}
+header h1{font-size:24px;margin:0}
+header .status{color:#cbd5e1;font-size:14px;font-weight:normal}
+.hbtns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+header .btn{background:#374151;color:#fff;border-color:#4b5563;font-size:15px;padding:10px 14px}
+header .btn.warn{background:var(--accent);border-color:var(--accent)}
+header .btn.lang.on{background:#fff;color:#111827;border-color:#fff}
+.badge{display:inline-block;min-width:24px;padding:1px 7px;border-radius:12px;background:#fff;color:#111827;font-size:14px;text-align:center}
+.btn{border:2px solid var(--line);background:var(--card);color:var(--text);padding:12px 16px;border-radius:10px;cursor:pointer;font-size:17px;font-weight:bold}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+.btn.blue{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn.danger{background:#c92a2a;border-color:#c92a2a;color:#fff}
+.btn.small{padding:6px 12px;font-size:14px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+main{display:grid;grid-template-columns:1fr 410px;gap:14px;padding:14px;height:calc(100vh - 66px)}
+@media (max-width:860px){main{grid-template-columns:1fr;height:auto}}
+.panel{background:var(--card);border:2px solid var(--line);border-radius:14px;padding:14px;overflow:auto}
+.hint{background:color-mix(in srgb,#f59f00 22%,var(--card));border:2px solid #f59f00;border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:16px;font-weight:bold}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.tab{--cc:#495057;padding:12px 18px;border-radius:12px;border:3px solid var(--cc);background:color-mix(in srgb,var(--cc) 10%,var(--card));color:var(--text);cursor:pointer;font-size:19px;font-weight:bold}
+.tab.active{background:var(--cc);color:#fff}
+#payTabs .tab{flex:1;font-size:17px;padding:12px 8px}
+#payTabs .tab[data-p=Cash]{--cc:#2b8a3e}
+#payTabs .tab[data-p=Transfer]{--cc:#1971c2}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:10px}
+.item{--cc:#495057;border:2px solid var(--cc);border-left-width:12px;border-radius:12px;padding:12px;cursor:pointer;background:color-mix(in srgb,var(--cc) 11%,var(--card));text-align:left;color:var(--text);min-height:112px;display:flex;flex-direction:column;justify-content:space-between;gap:6px}
+.item:hover{background:color-mix(in srgb,var(--cc) 24%,var(--card))}
+.item:active{transform:scale(.97)}
+.item .code{align-self:flex-start;background:var(--cc);color:#fff;font-size:14px;font-weight:bold;padding:2px 9px;border-radius:6px}
+.item .name{font-size:20px;font-weight:bold;line-height:1.2}
+.item .price{font-size:22px;font-weight:bold}
+.item .price small{font-size:13px;font-weight:bold;color:var(--muted);margin-left:4px}
+.open{border-style:dashed}
+.ohead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.ohead h3{margin:0;font-size:22px}
+.row{display:flex;gap:6px}
+.cart-row{--cc:#868e96;display:flex;justify-content:space-between;gap:8px;padding:10px;margin-bottom:6px;border-left:8px solid var(--cc);background:color-mix(in srgb,var(--cc) 10%,var(--card));border-radius:8px;font-size:17px}
+.cart-row b{font-size:18px}
+.cart-row small{color:var(--muted);font-size:14px}
+.qty{display:flex;align-items:center;gap:8px;font-size:20px;font-weight:bold;justify-content:flex-end}
+.qty button{width:38px;height:38px;border-radius:8px;border:2px solid var(--line);background:var(--card);color:var(--text);cursor:pointer;font-size:22px;font-weight:bold}
+.total{display:flex;justify-content:space-between;align-items:center;font-size:30px;font-weight:bold;margin:12px 0}
+.total.small{font-size:20px}
+#total,#payTotal{color:var(--accent)}
+input[type=number],input[type=text],input[type=password],select{width:100%;padding:12px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font-size:18px}
+label{font-size:16px;font-weight:bold;color:var(--text);display:block;margin:12px 0 5px}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:10;padding:12px}
+.modal{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:420px}
+.modal h3{margin:0 0 12px;font-size:22px}
+.modal.wide{max-width:960px;max-height:92vh;overflow:auto}
+.opts{display:grid;gap:10px}
+.opts .btn{background:var(--cc);border-color:var(--cc);color:#fff;font-size:20px;padding:16px}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
+.status{font-size:14px;color:var(--muted)}
+#btnSave,#btnSavePay{font-size:19px;padding:16px 8px;flex:1}
+.paybar{display:flex;gap:8px;position:sticky;bottom:-14px;background:var(--card);padding:10px 0 14px;margin-bottom:-14px;border-top:2px solid var(--line)}
+.pill{display:inline-block;padding:2px 10px;border-radius:12px;font-size:13px;font-weight:bold;color:#fff}
+.pill.paid{background:var(--ok)}.pill.open{background:var(--accent)}.pill.void{background:#868e96}
+.bill{border:2px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.bill .bh{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:18px}
+.bill .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.bill .acts .btn{flex:1;padding:10px}
+#toast{display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:100px;background:#111827;color:#fff;padding:12px 22px;border-radius:10px;font-size:18px;font-weight:bold;z-index:50;box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.asec{border:2px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px}
+.asec h4{margin:0 0 8px;font-size:18px}
+.scroll-x{overflow-x:auto}
+.scroll-x input,.scroll-x select{padding:8px;font-size:16px;min-width:70px}
+.adminbar{position:sticky;top:-18px;background:var(--card);padding:8px 0 10px;z-index:2;display:flex;gap:8px;justify-content:space-between;align-items:center;border-bottom:2px solid var(--line);margin-bottom:12px}
+@media (max-width:520px){.grid{grid-template-columns:repeat(2,1fr)}.item .name{font-size:17px}.tab{font-size:17px;padding:10px 14px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🍳 POS System <span class="status" id="src"></span></h1>
+  <div class="hbtns">
+    <button class="btn warn" id="btnBills">📋 <span data-t="Open bills"></span> <span class="badge" id="billBadge">0</span></button>
+    <button class="btn" id="btnStaff">👥 <span data-t="Staff"></span></button>
+    <button class="btn" id="btnHist">📊 <span data-t="Sales history"></span></button>
+    <button class="btn" id="btnExport">⬇️ <span data-t="Export sales (.xlsx)"></span></button>
+    <button class="btn" id="btnAdmin">🔒 Admin</button>
+    <span class="hbtns" style="gap:4px"><button class="btn lang" data-l="en">EN</button><button class="btn lang" data-l="mz">Mizo</button></span>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="hint">① <span data-t="Pick a category"></span> &nbsp;→&nbsp; ② <span data-t="Tap a menu"></span> &nbsp;→&nbsp; ③ <span data-t="Save the bill"></span> &nbsp;→&nbsp; ④ <span data-t="Pay when ready"></span></div>
+    <div class="tabs" id="tabs"></div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <aside class="panel">
+    <div class="ohead">
+      <h3>🧾 <span data-t="Order"></span> <span class="status" id="orderNo"></span></h3>
+      <button class="btn small" id="btnClear">🗑 <span data-t="Clear"></span></button>
+    </div>
+    <label style="margin-top:0">👤 <span data-t="Order taken by"></span></label>
+    <div class="row" style="margin-bottom:6px"><select id="selTaker"></select><button class="btn" data-staff title="Add / edit names">＋</button></div>
+    <div id="cart" style="min-height:90px"></div>
+    <div class="total"><span data-t="Total"></span><span id="total">Rs 0</span></div>
+    <label>📝 <span data-t="Note (optional)"></span></label>
+    <input type="text" id="note" data-tp="e.g. table 5, no spicy, take away" placeholder="e.g. table 5, no spicy, take away">
+    <div class="paybar">
+      <button class="btn blue" id="btnSave" disabled>💾 <span data-t="Save Bill"></span></button>
+      <button class="btn ok" id="btnSavePay" disabled>💰 <span data-t="Save & Pay"></span></button>
+    </div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+
+<!-- Option modal -->
+<div class="modal-bg" id="optModal"><div class="modal">
+  <h3 id="optTitle"></h3><div class="opts" id="optList"></div>
+  <button class="btn" style="margin-top:10px;width:100%" onclick="closeModals()"><span data-t="Cancel"></span></button>
+</div></div>
+
+<!-- Open item modal -->
+<div class="modal-bg" id="openModal"><div class="modal">
+  <h3>✏️ <span data-t="Open item"></span></h3>
+  <label><span data-t="Item name (optional)"></span></label><input type="text" id="oiName" placeholder="Open item">
+  <label><span data-t="Price"></span></label><input type="number" id="oiPrice" min="0" step="any" placeholder="0.00">
+  <label><span data-t="Quantity"></span></label><input type="number" id="oiQty" min="1" value="1">
+  <div style="display:flex;gap:8px;margin-top:14px">
+    <button class="btn" style="flex:1" onclick="closeModals()"><span data-t="Cancel"></span></button>
+    <button class="btn primary" style="flex:2" id="oiAdd"><span data-t="Add to order"></span></button>
+  </div>
+</div></div>
+
+<!-- Open bills modal -->
+<div class="modal-bg" id="billsModal"><div class="modal" style="max-width:640px;max-height:90vh;overflow:auto">
+  <h3>📋 <span data-t="Open bills"></span></h3><div id="billsBody"></div>
+  <button class="btn" style="margin-top:6px;width:100%" onclick="closeModals()"><span data-t="Close"></span></button>
+</div></div>
+
+<!-- Pay modal -->
+<div class="modal-bg" id="payModal"><div class="modal" style="max-width:480px;max-height:94vh;overflow:auto">
+  <h3 id="payTitle"></h3>
+  <div id="paySummary"></div>
+  <div class="total"><span data-t="Total"></span><span id="payTotal">Rs 0</span></div>
+  <label>💳 <span data-t="Payment"></span></label>
+  <div class="tabs" id="payTabs" style="margin-bottom:4px">
+    <button class="tab active" data-p="Cash">💵 <span data-t="Cash"></span></button>
+    <button class="tab" data-p="Transfer">📱 <span data-t="Transfer"></span></button>
+  </div>
+  <div id="cashBox">
+    <label><span data-t="Cash received"></span></label>
+    <div class="row"><input type="number" id="cash" min="0" step="any" placeholder="0.00"><button class="btn" id="btnExact"><span data-t="Exact amount"></span></button></div>
+    <div class="total small"><span data-t="Change"></span><span id="change">Rs 0</span></div>
+  </div>
+  <label>🧑‍💼 <span data-t="Cashier"></span></label>
+  <div class="row"><select id="selCashier"></select><button class="btn" data-staff title="Add / edit names">＋</button></div>
+  <div style="display:flex;gap:8px;margin-top:16px">
+    <button class="btn" style="flex:1" onclick="closeModals()"><span data-t="Cancel"></span></button>
+    <button class="btn ok" id="btnConfirmPay" style="flex:2;font-size:21px;padding:16px" disabled>✅ <span data-t="Confirm payment"></span></button>
+  </div>
+</div></div>
+
+<!-- Staff modal -->
+<div class="modal-bg" id="staffModal" style="z-index:20"><div class="modal" style="max-width:420px;max-height:85vh;overflow:auto">
+  <h3>👥 <span data-t="Staff names"></span></h3><div id="staffBody"></div>
+  <button class="btn" style="margin-top:12px;width:100%" onclick="$('staffModal').style.display='none'"><span data-t="Done"></span></button>
+</div></div>
+
+<!-- History modal -->
+<div class="modal-bg" id="histModal"><div class="modal" style="max-width:680px;max-height:88vh;overflow:auto">
+  <h3>📊 <span data-t="Sales history"></span></h3><div id="histBody"></div>
+  <button class="btn" style="margin-top:12px;width:100%" onclick="closeModals()"><span data-t="Close"></span></button>
+</div></div>
+
+<!-- PIN modal -->
+<div class="modal-bg" id="pinModal" style="z-index:20"><div class="modal" style="max-width:340px">
+  <h3>🔒 Admin</h3>
+  <label>PIN</label><input type="password" id="pinInput" inputmode="numeric" autocomplete="off">
+  <div id="pinErr" style="color:#c92a2a;font-weight:bold;min-height:22px;margin-top:6px"></div>
+  <div style="display:flex;gap:8px;margin-top:8px">
+    <button class="btn" style="flex:1" onclick="$('pinModal').style.display='none'">Cancel</button>
+    <button class="btn primary" style="flex:2" id="pinOk">Unlock</button>
+  </div>
+</div></div>
+
+<!-- Admin modal -->
+<div class="modal-bg" id="adminModal"><div class="modal wide">
+  <div class="adminbar">
+    <h3 style="margin:0">⚙️ Admin</h3>
+    <div style="display:flex;gap:8px">
+      <button class="btn" onclick="closeModals()">Close</button>
+      <button class="btn ok" id="adminSave">💾 Save changes</button>
+    </div>
+  </div>
+  <div id="adminBody"></div>
+  <input type="file" id="file" accept=".xlsx,.xls" hidden>
+</div></div>
+
+<script>
+// ====================== Helpers ======================
+const $ = id => document.getElementById(id);
+const money = n => { n = Number(n||0); return 'Rs ' + (Number.isInteger(n) ? n : n.toFixed(2)); };
+const load = (k,d) => { try { const v = JSON.parse(localStorage.getItem(k)); return (v===null||v===undefined) ? d : v; } catch(e){ return d; } };
+const save = (k,v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} };
+function escH(x){ return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function stamp(){ const d=new Date(), p=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
+function toast(msg){ const el=$('toast'); el.textContent=msg; el.style.display='block'; clearTimeout(toast.t); toast.t=setTimeout(()=>el.style.display='none',2500); }
+function closeModals(){ document.querySelectorAll('.modal-bg').forEach(m=>m.style.display='none'); }
+document.querySelectorAll('.modal-bg').forEach(m=>m.onclick=e=>{ if(e.target===m) m.style.display='none'; });
+
+// ====================== Languages ======================
+// English is the main language. Mizo labels are filled in from Admin > Languages
+// (or the "Labels" sheet of menu.xlsx). Any label left blank falls back to English.
+const KEYS = [
+ 'Open bills','Staff','Sales history','Export sales (.xlsx)',
+ 'Pick a category','Tap a menu','Save the bill','Pay when ready',
+ 'Stir-fry','Soup','Salad','Mizo Foods','Drink','Open item','Pork','Chicken','Seafood',
+ 'choose meat','choose option','Custom price','Order','Clear','Order taken by','No items yet','Total',
+ 'Note (optional)','e.g. table 5, no spicy, take away','Save Bill','Save & Pay',
+ 'Cancel','Close','Done','Item name (optional)','Price','Quantity','Add to order',
+ 'Pay','Edit','Cancel bill','No open bills','Paid','Open','Void','Unpaid',
+ 'Pay Bill','Payment','Cash','Transfer','Cash received','Exact amount','Change','Cashier','Confirm payment',
+ 'Staff names','Order takers','Cashiers','New name','Add',
+ 'Select date','bills','Item','Qty','Order by','Bill saved','Bill paid','No sales yet'
+];
+let lang = load('pos_lang','en');
+let fileLabels = {};              // from menu.xlsx > Labels
+let localLabels = load('pos_labels',{});   // edited in Admin
+let labels = {};
+function mergeLabels(){ labels = Object.assign({}, fileLabels, localLabels); }
+function t(s){ if(lang!=='mz') return s; const v = labels[s]; return v ? v : s; }
+function applyLang(){
+  document.documentElement.lang = lang==='mz' ? 'lus' : 'en';
+  document.querySelectorAll('[data-t]').forEach(el=>el.textContent = t(el.dataset.t));
+  document.querySelectorAll('[data-tp]').forEach(el=>el.placeholder = t(el.dataset.tp));
+  document.querySelectorAll('.lang').forEach(b=>b.classList.toggle('on', b.dataset.l===lang));
+  render(); updateBadge();
+}
+document.querySelectorAll('.lang').forEach(b=>b.onclick=()=>{ lang=b.dataset.l; save('pos_lang',lang); applyLang(); });
+
+// ====================== Menu data ======================
+const CATEGORIES = ['Stir-fry','Soup','Salad','Mizo Foods','Drink','Open item'];
+const REAL_CATS = ['Stir-fry','Soup','Salad','Mizo Foods','Drink'];
+const PREFIX = {'Stir-fry':'F','Soup':'S','Salad':'SA','Mizo Foods':'MF','Drink':'D'};
+const SLOTS_PER_CATEGORY = 10;
+// Starter menu (from the "Thai Special Menu" cards). Empty slots are reserved: blank name = hidden on the order screen.
+const RP = [{name:'Regular',price:100},{name:'With Prawn',price:160}];
+const STARTER = [
+  {code:'F01',category:'Stir-fry',name:'1 Mama Spicy',price:100,variants:RP},
+  {code:'F02',category:'Stir-fry',name:'Chicken Wing',price:200},
+  {code:'F03',category:'Stir-fry',name:'3 Fried Glass Noodles',price:80,variants:[{name:'Vegetable',price:80},{name:'With Prawn',price:150}]},
+  {code:'F04',category:'Stir-fry',name:'Tom Yam Fried Rice',price:100,variants:RP},
+  {code:'F05',category:'Stir-fry',name:'Cashewnut Fried Rice',price:100,variants:RP},
+  {code:'F06',category:'Stir-fry',name:'Steam Fish Limestone',price:500},
+  {code:'S01',category:'Soup',name:'Mama Tom Yam Noodle',price:100,variants:[{name:'Vegetable',price:100},{name:'Prawn',price:160}]},
+  {code:'S02',category:'Soup',name:'Tom Yam Sea Foods',price:250,variants:[{name:'Small',price:250},{name:'Large',price:350}]},
+  {code:'SA01',category:'Salad',name:'Pork Slice Salad',price:200},
+  {code:'SA02',category:'Salad',name:'Chicken Salad',price:150},
+  {code:'SA03',category:'Salad',name:'Papaya Salad',price:100,variants:RP},
+  {code:'MF01',category:'Mizo Foods',name:'Chaw Pangngai',price:250},
+  {code:'MF02',category:'Mizo Foods',name:'Chaw Te',price:100},
+  {code:'MF03',category:'Mizo Foods',name:'Sabuti',price:50,variants:[{name:'Small',price:50},{name:'Large',price:100}]},
+  {code:'MF04',category:'Mizo Foods',name:'Veg Chow',price:70},
+  {code:'MF05',category:'Mizo Foods',name:'Egg Chow',price:80},
+  {code:'MF06',category:'Mizo Foods',name:'Veg Rice',price:70},
+  {code:'MF07',category:'Mizo Foods',name:'Egg Rice',price:80},
+  {code:'MF08',category:'Mizo Foods',name:'Omelette',price:70},
+  {code:'D01',category:'Drink',name:'Lassi',price:20},
+  {code:'D02',category:'Drink',name:'Coffee',price:20},
+  {code:'D03',category:'Drink',name:'Thingpui',price:10}
+];
+const DEFAULT_MENU = [];
+REAL_CATS.forEach(cat=>{
+  const items = STARTER.filter(m=>m.category===cat);
+  items.forEach(m=>DEFAULT_MENU.push({code:m.code,category:cat,name:m.name,price:m.price,hasOptions:false,variants:(m.variants||[]).map(v=>({...v}))}));
+  for(let i=items.length+1;i<=SLOTS_PER_CATEGORY;i++)
+    DEFAULT_MENU.push({code:PREFIX[cat]+String(i).padStart(2,'0'),category:cat,name:'',price:0,hasOptions:(cat==='Stir-fry'||cat==='Soup'),variants:[]});
+});
+const DEFAULT_OPTIONS = [{name:'Pork',extra:0},{name:'Chicken',extra:0},{name:'Seafood',extra:20}];
+const CAT = {'Stir-fry':{c:'#e8590c',i:'🍳'},'Soup':{c:'#1971c2',i:'🍲'},'Salad':{c:'#2f9e44',i:'🥗'},'Mizo Foods':{c:'#0c8599',i:'🍛'},'Drink':{c:'#c2255c',i:'🥤'},'Open item':{c:'#7048e8',i:'✏️'}};
+const catColor = k => (CAT[k]||{c:'#495057'}).c;
+const catIcon = k => (CAT[k]||{i:''}).i;
+const OPT_ICON = {pork:'🐷',chicken:'🐔',seafood:'🦐'};
+
+let menu = DEFAULT_MENU, options = DEFAULT_OPTIONS;
+let cart = [], activeTab = 'Stir-fry', editingNo = null, payNo = null, payMethod = 'Cash';
+
+// ====================== Bills storage (+ migrate old flat sales) ======================
+let bills = load('pos_bills',[]);
+(function migrate(){
+  if(load('pos_migrated',false)) return;
+  const old = load('pos_sales',[]);
+  if(old.length && !bills.length){
+    const g = {};
+    old.forEach(r=>{
+      const b = g[r.OrderNo] = g[r.OrderNo] || {no:r.OrderNo,created:r.DateTime,paidAt:r.DateTime,status:'paid',orderBy:r.OrderBy||'',cashier:r.Cashier||'',payment:r.Payment||'',note:r.Note||'',cash:null,lines:[]};
+      b.lines.push({code:r.Code,name:r.Item,option:r.Option||'',qty:r.Qty,unit:r.UnitPrice,cat:''});
+    });
+    bills = Object.values(g); save('pos_bills',bills);
+  }
+  save('pos_migrated',true);
+})();
+const billTotal = b => b.lines.reduce((s,l)=>s+l.unit*l.qty,0);
+const nextNo = () => load('pos_counter',0)+1;
+function updateBadge(){ $('billBadge').textContent = bills.filter(b=>b.status==='open').length; }
+
+// ====================== Excel I/O ======================
+function needXLSX(){ if(typeof XLSX==='undefined'){ alert('Excel library could not load. Check your internet connection.'); return true; } return false; }
+function parseWorkbook(wb){
+  const m = XLSX.utils.sheet_to_json(wb.Sheets['Menu']||wb.Sheets[wb.SheetNames[0]]);
+  const parsed = m.filter(r=>r.Code).map(r=>({
+    code:String(r.Code).trim(), category:String(r.Category||'').trim(),
+    name:String(r.Name===undefined?'':r.Name).trim(), price:Number(r.Price)||0,
+    hasOptions:String(r.HasOptions||'N').trim().toUpperCase().startsWith('Y'), variants:[]
+  }));
+  if(wb.Sheets['Variants']) XLSX.utils.sheet_to_json(wb.Sheets['Variants']).forEach(r=>{
+    const it = parsed.find(x=>x.code===String(r.Code).trim());
+    if(it && r.Variant!==undefined && r.Variant!=='' && !isNaN(Number(r.Price))) it.variants.push({name:String(r.Variant).trim(),price:Number(r.Price)});
+  });
+  let o = wb.Sheets['Options'] ? XLSX.utils.sheet_to_json(wb.Sheets['Options']).filter(r=>r.Option)
+    .map(r=>({name:String(r.Option).trim(), extra:Number(r.ExtraPrice)||0})) : DEFAULT_OPTIONS;
+  if(!o.length) o = DEFAULT_OPTIONS;
+  const lab = {};
+  if(wb.Sheets['Labels']) XLSX.utils.sheet_to_json(wb.Sheets['Labels']).forEach(r=>{ if(r.Key && r.Mizo) lab[String(r.Key)] = String(r.Mizo); });
+  return {menu:parsed.length?parsed:DEFAULT_MENU, options:o, labels:lab};
+}
+function allLabelKeys(){
+  const set = new Set(KEYS);
+  document.querySelectorAll('[data-t]').forEach(el=>set.add(el.dataset.t));
+  return [...set];
+}
+function menuWorkbook(m,o){
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(m.map(x=>({Code:x.code,Category:x.category,Name:x.name,Price:x.price,HasOptions:x.hasOptions?'Y':'N'}))),'Menu');
+  const vr = []; m.forEach(x=>(x.variants||[]).forEach(v=>vr.push({Code:x.code,Variant:v.name,Price:v.price})));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vr.length?vr:[{Code:'',Variant:'',Price:''}]),'Variants');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(o.map(x=>({Option:x.name,ExtraPrice:x.extra}))),'Options');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allLabelKeys().map(k=>({Key:k,English:k,Mizo:labels[k]||''}))),'Labels');
+  return wb;
+}
+async function autoLoad(){
+  let fileWb = null;
+  try{
+    const res = await fetch('menu.xlsx?'+Date.now());
+    if(res.ok) fileWb = XLSX.read(await res.arrayBuffer(),{type:'array'});
+  }catch(e){}
+  const saved = load('pos_menu',null);
+  let src = 'built-in default';
+  if(fileWb){ const r = parseWorkbook(fileWb); fileLabels = r.labels; menu = r.menu; options = r.options; src = 'menu.xlsx'; }
+  if(saved){ menu = saved.menu; options = saved.options; src = 'edited in Admin'; }
+  $('src').textContent = '· menu: ' + src;
+  mergeLabels(); applyLang();
+}
+
+// ====================== Order screen ======================
+function render(){
+  $('tabs').innerHTML = CATEGORIES.map(c=>`<button class="tab ${c===activeTab?'active':''}" data-c="${c}" style="--cc:${catColor(c)}">${catIcon(c)} ${escH(t(c))}</button>`).join('');
+  document.querySelectorAll('#tabs .tab').forEach(b=>b.onclick=()=>{activeTab=b.dataset.c;render();});
+  const g = $('grid');
+  if(activeTab==='Open item'){
+    g.innerHTML = `<button class="item open" id="openBtn" style="--cc:${catColor('Open item')}"><div class="code">OPEN</div><div class="name">✏️ ${escH(t('Open item'))}</div><div class="price">${escH(t('Custom price'))}</div></button>`;
+    $('openBtn').onclick = openOpenItem;
+  } else {
+    g.innerHTML = menu.filter(m=>m.category===activeTab && String(m.name).trim()).map(m=>{
+      const hasV = m.variants && m.variants.length;
+      const price = hasV ? Math.min(...m.variants.map(v=>v.price)) : m.price;
+      const hint = hasV ? t('choose option') : (m.hasOptions ? t('choose meat') : '');
+      return `<button class="item" data-code="${escH(m.code)}" style="--cc:${catColor(m.category)}"><div class="code">${escH(m.code)}</div><div class="name">${escH(m.name)}</div><div class="price">${money(price)}${hint?`<small>+ ${escH(hint)}</small>`:''}</div></button>`;
+    }).join('');
+    g.querySelectorAll('.item').forEach(b=>b.onclick=()=>pickItem(b.dataset.code));
+  }
+  renderCart();
+}
+function pickItem(code){
+  const m = menu.find(x=>x.code===code); if(!m) return;
+  if(m.variants && m.variants.length){
+    $('optTitle').textContent = m.name;
+    $('optList').style.setProperty('--cc', catColor(m.category));
+    $('optList').innerHTML = m.variants.map((v,i)=>`<button class="btn" data-v="${i}">${escH(t(v.name))} — ${money(v.price)}</button>`).join('');
+    $('optList').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+      const v = m.variants[b.dataset.v];
+      addToCart({code:m.code,name:m.name,option:v.name,unit:v.price,cat:m.category}); closeModals();
+    });
+    $('optModal').style.display='flex'; return;
+  }
+  if(!m.hasOptions) return addToCart({code:m.code,name:m.name,option:'',unit:m.price,cat:m.category});
+  $('optTitle').textContent = m.name;
+  $('optList').style.setProperty('--cc', catColor(m.category));
+  $('optList').innerHTML = options.map(o=>`<button class="btn" data-o="${escH(o.name)}">${OPT_ICON[o.name.toLowerCase()]||''} ${escH(t(o.name))}${o.extra?' (+'+money(o.extra)+')':''} — ${money(m.price+o.extra)}</button>`).join('');
+  $('optList').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    const o = options.find(x=>x.name===b.dataset.o);
+    addToCart({code:m.code,name:m.name,option:o.name,unit:m.price+o.extra,cat:m.category}); closeModals();
+  });
+  $('optModal').style.display='flex';
+}
+function openOpenItem(){ $('oiName').value=''; $('oiPrice').value=''; $('oiQty').value=1; $('openModal').style.display='flex'; $('oiPrice').focus(); }
+$('oiAdd').onclick = ()=>{
+  const price = parseFloat($('oiPrice').value);
+  if(isNaN(price)||price<0) return alert('Please enter a valid price');
+  const qty = Math.max(1,parseInt($('oiQty').value)||1);
+  addToCart({code:'OPEN',name:$('oiName').value.trim()||'Open item',option:'',unit:price,qty,cat:'Open item'}); closeModals();
+};
+function addToCart(it){
+  const key = it.code+'|'+it.option+'|'+it.unit+'|'+it.name;
+  const ex = cart.find(c=>c.key===key);
+  if(ex) ex.qty += it.qty||1; else cart.push({...it,key,qty:it.qty||1});
+  renderCart();
+}
+function renderCart(){
+  $('cart').innerHTML = cart.length ? cart.map((c,i)=>`
+    <div class="cart-row" style="--cc:${catColor(c.cat)}"><div><b>${escH(c.name)}</b><br><small>${escH(c.code)}${c.option?' · '+escH(t(c.option)):''} · ${money(c.unit)}</small></div>
+    <div style="text-align:right"><div class="qty"><button data-i="${i}" data-d="-1">−</button>${c.qty}<button data-i="${i}" data-d="1">+</button></div><small>${money(c.unit*c.qty)}</small></div></div>`).join('')
+    : `<div class="status">${escH(t('No items yet'))}</div>`;
+  $('cart').querySelectorAll('.qty button').forEach(b=>b.onclick=()=>{
+    const c = cart[b.dataset.i]; c.qty += Number(b.dataset.d);
+    if(c.qty<=0) cart.splice(b.dataset.i,1); renderCart();
+  });
+  const tt = cart.reduce((s,c)=>s+c.unit*c.qty,0);
+  $('total').textContent = money(tt);
+  $('btnSave').disabled = $('btnSavePay').disabled = !cart.length;
+  $('orderNo').textContent = '#' + (editingNo || nextNo()) + (editingNo ? ' ✏️' : '');
+}
+$('btnClear').onclick = ()=>{ cart=[]; $('note').value=''; editingNo=null; renderCart(); };
+
+// ====================== Save bill (unpaid) ======================
+function saveBill(payNow){
+  if(!cart.length) return;
+  let n = editingNo, created = stamp();
+  if(n){ const old = bills.find(b=>b.no===n); if(old) created = old.created; }
+  else { n = nextNo(); save('pos_counter',n); }
+  const bill = {no:n,created,status:'open',orderBy:$('selTaker').value,note:$('note').value.trim(),
+    lines:cart.map(c=>({code:c.code,name:c.name,option:c.option,qty:c.qty,unit:c.unit,cat:c.cat})),
+    payment:'',cashier:'',cash:null,paidAt:''};
+  const i = bills.findIndex(b=>b.no===n);
+  if(i>=0) bills[i]=bill; else bills.push(bill);
+  save('pos_bills',bills);
+  cart=[]; $('note').value=''; editingNo=null;
+  render(); updateBadge(); toast('✅ '+t('Bill saved')+' #'+n);
+  if(payNow) openPay(n);
+}
+$('btnSave').onclick = ()=>saveBill(false);
+$('btnSavePay').onclick = ()=>saveBill(true);
+
+// ====================== Open bills ======================
+function renderBills(){
+  const list = bills.filter(b=>b.status==='open').sort((a,b)=>a.no-b.no);
+  $('billsBody').innerHTML = list.length ? list.map(b=>`
+    <div class="bill">
+      <div class="bh"><b>#${b.no} · ${escH(b.created.slice(11,16))}</b><b>${money(billTotal(b))}</b></div>
+      <div class="status">${escH(t('Order by'))}: ${escH(b.orderBy||'-')}${b.note?' · 📝 '+escH(b.note):''}</div>
+      <table style="margin-top:6px">${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}</td><td>${l.qty} × ${money(l.unit)}</td><td style="text-align:right">${money(l.qty*l.unit)}</td></tr>`).join('')}</table>
+      <div class="acts">
+        <button class="btn ok" data-pay="${b.no}">💰 ${escH(t('Pay'))}</button>
+        <button class="btn" data-edit="${b.no}">✏️ ${escH(t('Edit'))}</button>
+        <button class="btn" data-void="${b.no}" style="color:#c92a2a">❌ ${escH(t('Cancel bill'))}</button>
+      </div>
+    </div>`).join('') : `<div class="status" style="padding:12px 0">${escH(t('No open bills'))}</div>`;
+  $('billsBody').querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>{ $('billsModal').style.display='none'; openPay(Number(b.dataset.pay)); });
+  $('billsBody').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editBill(Number(b.dataset.edit)));
+  $('billsBody').querySelectorAll('[data-void]').forEach(b=>b.onclick=()=>{
+    const n = Number(b.dataset.void);
+    if(!confirm('Cancel bill #'+n+'? It will be kept in history as Void.')) return;
+    const bl = bills.find(x=>x.no===n); if(bl){ bl.status='void'; save('pos_bills',bills); }
+    if(editingNo===n){ cart=[]; editingNo=null; $('note').value=''; }
+    renderBills(); updateBadge(); renderCart();
+  });
+}
+function editBill(n){
+  const b = bills.find(x=>x.no===n); if(!b) return;
+  if(cart.length && !confirm('Replace the current order on screen with bill #'+n+'?')) return;
+  cart = b.lines.map(l=>({...l,key:l.code+'|'+l.option+'|'+l.unit+'|'+l.name}));
+  editingNo = n; $('note').value = b.note||'';
+  if([...$('selTaker').options].some(o=>o.value===b.orderBy)) $('selTaker').value = b.orderBy;
+  rememberSel(); closeModals(); renderCart();
+}
+$('btnBills').onclick = ()=>{ renderBills(); $('billsModal').style.display='flex'; };
+
+// ====================== Pay ======================
+function openPay(n){
+  const b = bills.find(x=>x.no===n); if(!b||b.status!=='open') return;
+  payNo = n; payMethod = 'Cash';
+  document.querySelectorAll('#payTabs .tab').forEach(x=>x.classList.toggle('active',x.dataset.p==='Cash'));
+  $('payTitle').textContent = '💰 ' + t('Pay Bill') + ' #' + n;
+  $('paySummary').innerHTML = `<div class="status">${escH(t('Order by'))}: ${escH(b.orderBy||'-')}${b.note?' · 📝 '+escH(b.note):''}</div>
+    <table style="margin-top:6px">${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}</td><td>${l.qty} × ${money(l.unit)}</td><td style="text-align:right">${money(l.qty*l.unit)}</td></tr>`).join('')}</table>`;
+  $('payTotal').textContent = money(billTotal(b));
+  $('cash').value = '';
+  fillSelect('selCashier',staff.cashiers,selStaff.cashier);
+  updatePay(); $('payModal').style.display='flex';
+}
+function updatePay(){
+  const b = bills.find(x=>x.no===payNo); if(!b) return;
+  const tt = billTotal(b), cash = parseFloat($('cash').value)||0;
+  $('cashBox').style.display = payMethod==='Cash' ? 'block' : 'none';
+  $('change').textContent = money(Math.max(0,cash-tt));
+  $('btnConfirmPay').disabled = payMethod==='Cash' && cash < tt;
+}
+document.querySelectorAll('#payTabs .tab').forEach(b=>b.onclick=()=>{
+  payMethod = b.dataset.p;
+  document.querySelectorAll('#payTabs .tab').forEach(x=>x.classList.toggle('active',x===b));
+  updatePay();
+});
+$('cash').oninput = updatePay;
+$('btnExact').onclick = ()=>{ const b = bills.find(x=>x.no===payNo); if(b){ $('cash').value = billTotal(b); updatePay(); } };
+$('btnConfirmPay').onclick = ()=>{
+  const b = bills.find(x=>x.no===payNo); if(!b) return;
+  b.status='paid'; b.paidAt=stamp(); b.payment=payMethod; b.cashier=$('selCashier').value;
+  b.cash = payMethod==='Cash' ? (parseFloat($('cash').value)||0) : null;
+  rememberSel(); save('pos_bills',bills);
+  if(editingNo===b.no){ cart=[]; editingNo=null; $('note').value=''; }
+  printReceipt(b); closeModals(); render(); updateBadge(); toast('✅ '+t('Bill paid')+' #'+b.no);
+};
+function printReceipt(b){
+  const w = window.open('','_blank','width=320,height=600'); if(!w) return;
+  const tt = billTotal(b);
+  w.document.write(`<pre style="font:13px monospace">POS RECEIPT #${b.no}\nOrdered: ${escH(b.created)}\nPaid   : ${escH(b.paidAt)}\n--------------------------------\n`+
+    b.lines.map(l=>`${escH(l.name)}${l.option?' ('+escH(l.option)+')':''}\n  ${l.qty} x ${money(l.unit)} = ${money(l.unit*l.qty)}`).join('\n')+
+    `\n--------------------------------\nTOTAL  ${money(tt)}\nPAID BY ${b.payment.toUpperCase()}`+
+    (b.payment==='Cash' ? `\nCASH   ${money(b.cash)}\nCHANGE ${money(b.cash-tt)}` : '')+
+    (b.note ? `\nNOTE: ${escH(b.note)}` : '')+`\nOrder by: ${escH(b.orderBy||'-')}\nCashier : ${escH(b.cashier||'-')}\n\nThank you!</pre>`);
+  w.document.close(); w.focus(); w.print();
+}
+
+// ====================== History ======================
+let histDay = null;
+function renderHistory(){
+  if(!bills.length){ $('histBody').innerHTML = `<div class="status">${escH(t('No sales yet'))}</div>`; return; }
+  const days = {};
+  bills.forEach(b=>{ const d=(b.paidAt||b.created).slice(0,10); (days[d]=days[d]||[]).push(b); });
+  const dayList = Object.keys(days).sort().reverse();
+  if(!histDay || !days[histDay]) histDay = dayList[0];
+  const sum = a=>a.reduce((s,b)=>s+billTotal(b),0);
+  const list = days[histDay].slice().sort((a,b)=>b.no-a.no);
+  const paid = list.filter(b=>b.status==='paid'), open = list.filter(b=>b.status==='open');
+  const byPay = {}; paid.forEach(b=>{ const k=b.payment||'Unspecified'; byPay[k]=(byPay[k]||0)+billTotal(b); });
+  const pill = s=>`<span class="pill ${s}">${escH(t(s==='paid'?'Paid':s==='open'?'Unpaid':'Void'))}</span>`;
+  $('histBody').innerHTML =
+    `<label>${escH(t('Select date'))}</label>
+     <select id="histSel">${dayList.map(d=>{const p=days[d].filter(b=>b.status==='paid'); return `<option value="${d}" ${d===histDay?'selected':''}>${d} — ${p.length} ${escH(t('bills'))}, ${money(sum(p))}</option>`;}).join('')}</select>
+     <div class="total" style="font-size:22px;margin-bottom:2px"><span>${histDay}: ${paid.length} ${escH(t('Paid'))}</span><span>${money(sum(paid))}</span></div>
+     <div class="status" style="margin-bottom:4px">${Object.entries(byPay).map(([k,v])=>escH(k)+': '+money(v)).join(' · ')||'-'}</div>
+     ${open.length?`<div class="status" style="margin-bottom:8px;color:var(--accent);font-weight:bold">${open.length} ${escH(t('Unpaid'))} · ${money(sum(open))}</div>`:''}
+     ${list.map(b=>`
+       <details style="border-bottom:1px solid var(--line);padding:8px 0">
+         <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px"><span>#${b.no} · ${escH((b.paidAt||b.created).slice(11,16))} ${pill(b.status)}${b.payment?' · '+escH(b.payment):''}${b.note?' · 📝':''}</span><b${b.status==='void'?' style="text-decoration:line-through"':''}>${money(billTotal(b))}</b></summary>
+         <div class="status" style="margin-top:4px">${escH(t('Order by'))}: ${escH(b.orderBy||'-')} · ${escH(t('Cashier'))}: ${escH(b.cashier||'-')}${b.note?' · 📝 '+escH(b.note):''}</div>
+         <table style="margin-top:6px"><tr><th>${escH(t('Item'))}</th><th>${escH(t('Qty'))}</th><th>${escH(t('Price'))}</th><th>${escH(t('Total'))}</th></tr>
+         ${b.lines.map(l=>`<tr><td>${escH(l.name)}${l.option?' ('+escH(t(l.option))+')':''}<br><small class="status">${escH(l.code)}</small></td><td>${l.qty}</td><td>${money(l.unit)}</td><td>${money(l.unit*l.qty)}</td></tr>`).join('')}</table>
+       </details>`).join('')}`;
+  $('histSel').onchange = e=>{ histDay=e.target.value; renderHistory(); };
+}
+$('btnHist').onclick = ()=>{ histDay=null; renderHistory(); $('histModal').style.display='flex'; };
+
+$('btnExport').onclick = ()=>{
+  if(needXLSX()) return;
+  if(!bills.length) return alert('No sales to export');
+  const wb = XLSX.utils.book_new();
+  const lines = []; bills.forEach(b=>b.lines.forEach(l=>lines.push({OrderNo:b.no,Created:b.created,PaidAt:b.paidAt,Status:b.status,Code:l.code,Item:l.name,Option:l.option,Qty:l.qty,UnitPrice:l.unit,LineTotal:l.unit*l.qty,Payment:b.payment,Cashier:b.cashier,OrderBy:b.orderBy,Note:b.note})));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lines),'Sales');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bills.map(b=>({OrderNo:b.no,Created:b.created,PaidAt:b.paidAt,Status:b.status,OrderBy:b.orderBy,Cashier:b.cashier,Payment:b.payment,Total:billTotal(b),CashReceived:b.cash,Note:b.note}))),'Bills');
+  const sum = {}; bills.filter(b=>b.status==='paid').forEach(b=>b.lines.forEach(l=>{ const k=l.code+'|'+l.name+'|'+l.option; sum[k]=sum[k]||{Code:l.code,Item:l.name,Option:l.option,Qty:0,Revenue:0}; sum[k].Qty+=l.qty; sum[k].Revenue+=l.unit*l.qty; }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.values(sum)),'Summary (paid)');
+  XLSX.writeFile(wb,'sales_'+new Date().toISOString().slice(0,10)+'.xlsx');
+};
+
+// ====================== Staff (order takers & cashiers) ======================
+let staff = load('pos_staff',{takers:['Puai'],cashiers:['Puai']});
+let selStaff = load('pos_sel',{taker:'Puai',cashier:'Puai'});
+function fillSelect(id,list,cur){
+  const el=$(id); el.innerHTML='';
+  list.forEach(n=>{ const o=document.createElement('option'); o.value=o.textContent=n; el.appendChild(o); });
+  el.value = list.includes(cur)?cur:list[0];
+}
+function renderStaffSelects(){
+  fillSelect('selTaker',staff.takers,selStaff.taker);
+  fillSelect('selCashier',staff.cashiers,selStaff.cashier);
+  rememberSel(); save('pos_staff',staff);
+}
+function rememberSel(){ selStaff={taker:$('selTaker').value,cashier:$('selCashier').value}; save('pos_sel',selStaff); }
+$('selTaker').onchange = $('selCashier').onchange = rememberSel;
+function renderStaffModal(){
+  $('staffBody').innerHTML = [['takers','Order takers'],['cashiers','Cashiers']].map(([k,title])=>`
+    <b>${escH(t(title))}</b>
+    <div style="margin:6px 0">${staff[k].map((n,i)=>`<div class="cart-row" style="padding:6px 10px"><span>${escH(n)}</span><button class="btn" data-k="${k}" data-i="${i}" style="padding:2px 10px">×</button></div>`).join('')}</div>
+    <div class="row" style="margin-bottom:14px"><input type="text" id="add_${k}" placeholder="${escH(t('New name'))}"><button class="btn primary" data-add="${k}">${escH(t('Add'))}</button></div>`).join('');
+  $('staffBody').querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>{
+    const list = staff[b.dataset.k];
+    if(list.length<=1) return alert('At least one name is required');
+    list.splice(b.dataset.i,1); renderStaffSelects(); renderStaffModal();
+  });
+  const addName = k=>{
+    const name = $('add_'+k).value.trim(); if(!name) return;
+    if(staff[k].some(x=>x.toLowerCase()===name.toLowerCase())) return alert('This name already exists');
+    staff[k].push(name); renderStaffSelects(); renderStaffModal(); $('add_'+k).focus();
+  };
+  $('staffBody').querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>addName(b.dataset.add));
+  $('staffBody').querySelectorAll('input[type=text]').forEach(i=>i.onkeydown=e=>{ if(e.key==='Enter') addName(i.id.slice(4)); });
+}
+function openStaff(){ renderStaffModal(); $('staffModal').style.display='flex'; }
+$('btnStaff').onclick = openStaff;
+document.querySelectorAll('[data-staff]').forEach(b=>b.onclick=openStaff);
+renderStaffSelects();
+
+// ====================== Admin ======================
+let adminUntil = 0, draft = null, draftOpts = null, draftLabels = null;
+$('btnAdmin').onclick = ()=>{
+  if(Date.now() < adminUntil) return openAdmin();
+  $('pinInput').value=''; $('pinErr').textContent=''; $('pinModal').style.display='flex'; $('pinInput').focus();
+};
+function checkPin(){
+  if($('pinInput').value === String(load('pos_pin','1234'))){ adminUntil = Date.now()+10*60*1000; $('pinModal').style.display='none'; openAdmin(); }
+  else $('pinErr').textContent = 'Wrong PIN';
+}
+$('pinOk').onclick = checkPin;
+$('pinInput').onkeydown = e=>{ if(e.key==='Enter') checkPin(); };
+
+function openAdmin(){
+  draft = JSON.parse(JSON.stringify(menu));
+  draftOpts = JSON.parse(JSON.stringify(options));
+  draftLabels = {}; allLabelKeys().forEach(k=>{ draftLabels[k] = labels[k]||''; });
+  renderAdmin(); $('adminModal').style.display='flex';
+}
+function variantsToText(m){ return (m.variants||[]).map(v=>v.name+'='+v.price).join(', '); }
+function parseVariants(txt){
+  return txt.split(/[,|;]+/).map(x=>x.trim()).filter(Boolean).map(x=>{
+    const i = x.lastIndexOf('='); if(i<1) return null;
+    const name = x.slice(0,i).trim(), price = parseFloat(x.slice(i+1));
+    return (name && !isNaN(price)) ? {name,price} : null;
+  }).filter(Boolean);
+}
+function renderAdmin(){
+  $('adminBody').innerHTML = `
+  <div class="asec"><h4>🍽️ Menu items <span class="status">(${draft.length}) · blank name = empty slot (hidden on the order screen)</span></h4>
+    <div class="status" style="margin-bottom:8px"><b>Variants</b> give each choice its own price, e.g. <i>Small=250, Large=350</i>. If Variants are filled in, they replace the Pork / Chicken / Seafood choice. Price = the "from" price shown on the card.</div>
+    <div class="scroll-x"><table>
+      <tr><th>Code</th><th>Category</th><th>Name</th><th>Price</th><th>Variants (Name=Price, …)</th><th>Meat options?</th><th></th></tr>
+      ${draft.map((m,i)=>`<tr>
+        <td><input type="text" style="width:80px" value="${escH(m.code)}" data-row="m" data-i="${i}" data-f="code"></td>
+        <td><select data-row="m" data-i="${i}" data-f="category">${REAL_CATS.map(c=>`<option ${c===m.category?'selected':''}>${c}</option>`).join('')}</select></td>
+        <td><input type="text" style="min-width:200px" value="${escH(m.name)}" data-row="m" data-i="${i}" data-f="name"></td>
+        <td><input type="number" style="width:100px" min="0" step="any" value="${m.price}" data-row="m" data-i="${i}" data-f="price"></td>
+        <td><input type="text" style="min-width:230px" placeholder="e.g. Small=250, Large=350" value="${escH(variantsToText(m))}" data-row="m" data-i="${i}" data-f="variants"></td>
+        <td style="text-align:center"><input type="checkbox" style="min-width:0;width:22px;height:22px" ${m.hasOptions?'checked':''} data-row="m" data-i="${i}" data-f="hasOptions"></td>
+        <td><button class="btn small danger" data-del="m" data-i="${i}">✕</button></td></tr>`).join('')}
+    </table></div>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <select id="newCat" style="max-width:200px">${REAL_CATS.map(c=>`<option>${c}</option>`).join('')}</select>
+      <button class="btn primary" id="addItem">＋ Add menu item</button>
+    </div>
+  </div>
+
+  <div class="asec"><h4>🐷🐔🦐 Meat options</h4>
+    <table>${draftOpts.map((o,i)=>`<tr>
+      <td><input type="text" value="${escH(o.name)}" data-row="o" data-i="${i}" data-f="name"></td>
+      <td>+ <input type="number" style="width:100px;display:inline-block" min="0" step="any" value="${o.extra}" data-row="o" data-i="${i}" data-f="extra"></td>
+      <td><button class="btn small danger" data-del="o" data-i="${i}">✕</button></td></tr>`).join('')}</table>
+    <button class="btn" id="addOpt" style="margin-top:8px">＋ Add option</button>
+  </div>
+
+  <div class="asec"><h4>🌐 Languages — Mizo labels</h4>
+    <div class="status" style="margin-bottom:8px">English is the main language. Type the Mizo text for each label; blank = shows English. Switch language with the EN / Mizo buttons at the top.</div>
+    <div class="scroll-x" style="max-height:260px;overflow:auto"><table>
+      <tr><th>English</th><th>Mizo</th></tr>
+      ${Object.keys(draftLabels).map(k=>`<tr><td>${escH(k)}</td><td><input type="text" style="min-width:220px" value="${escH(draftLabels[k])}" data-row="lab" data-k="${escH(k)}"></td></tr>`).join('')}
+    </table></div>
+  </div>
+
+  <div class="asec"><h4>📁 Excel</h4>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" id="aImport">⬆️ Import menu (.xlsx)</button>
+      <button class="btn" id="aDownload">⬇️ Download menu.xlsx</button>
+      <button class="btn" id="aReset">↩️ Reset to menu.xlsx from GitHub</button>
+    </div>
+    <div class="status" style="margin-top:8px">Edits made here are saved in this browser. To make them permanent for every device, download menu.xlsx and upload it to GitHub (replace the old file), then press Reset.</div>
+  </div>
+
+  <div class="asec"><h4>🔧 Settings</h4>
+    <label style="margin-top:0">Change Admin PIN</label>
+    <div class="row"><input type="password" id="newPin" placeholder="New PIN (at least 4 characters)" autocomplete="off"><button class="btn" id="setPin">Set PIN</button></div>
+    <label>Danger zone</label>
+    <button class="btn danger" id="clearHist">🗑 Delete ALL sales history</button>
+  </div>`;
+}
+// live editing of the draft
+function adminInput(e){
+  const el = e.target, row = el.dataset.row; if(!row) return;
+  if(row==='m'){ const m = draft[el.dataset.i], f = el.dataset.f;
+    m[f] = f==='price' ? (parseFloat(el.value)||0) : f==='hasOptions' ? el.checked : f==='variants' ? parseVariants(el.value) : el.value; }
+  else if(row==='o'){ const o = draftOpts[el.dataset.i], f = el.dataset.f;
+    o[f] = f==='extra' ? (parseFloat(el.value)||0) : el.value; }
+  else if(row==='lab'){ draftLabels[el.dataset.k] = el.value; }
+}
+$('adminBody').addEventListener('input',adminInput);
+$('adminBody').addEventListener('change',adminInput);
+$('adminBody').addEventListener('click',e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  if(b.dataset.del==='m'){
+    const m = draft[b.dataset.i];
+    if(confirm('Delete "'+m.name+'" ('+m.code+')? Past bills keep their record.')){ draft.splice(b.dataset.i,1); renderAdmin(); }
+  } else if(b.dataset.del==='o'){
+    if(draftOpts.length<=1) return alert('At least one option is required');
+    draftOpts.splice(b.dataset.i,1); renderAdmin();
+  } else if(b.id==='addItem'){
+    const cat = $('newCat').value, pre = PREFIX[cat];
+    let idx = draft.findIndex(m=>m.category===cat && !String(m.name).trim());   // reuse an empty slot first
+    if(idx<0){
+      let max = 0; draft.forEach(m=>{ const c=m.code.toUpperCase(); if(c.startsWith(pre)){ const rest=c.slice(pre.length); if(/^\d+$/.test(rest)) max=Math.max(max,parseInt(rest)); } });
+      draft.push({code:pre+String(max+1).padStart(2,'0'),category:cat,name:'',price:0,hasOptions:(cat==='Stir-fry'||cat==='Soup'),variants:[]});
+      idx = draft.length-1;
+    }
+    renderAdmin();
+    const inp = $('adminBody').querySelector(`input[data-row=m][data-i="${idx}"][data-f=name]`);
+    inp.scrollIntoView({block:'center'}); inp.focus();
+  } else if(b.id==='addOpt'){ draftOpts.push({name:'New option',extra:0}); renderAdmin(); }
+  else if(b.id==='aImport'){ $('file').click(); }
+  else if(b.id==='aDownload'){
+    if(needXLSX()) return;
+    mergeDraftLabels(); XLSX.writeFile(menuWorkbook(draft,draftOpts),'menu.xlsx');
+  } else if(b.id==='aReset'){
+    if(confirm('Remove the edits saved in this browser and reload menu.xlsx from GitHub?')){ localStorage.removeItem('pos_menu'); localStorage.removeItem('pos_labels'); location.reload(); }
+  } else if(b.id==='setPin'){
+    const p = $('newPin').value.trim(); if(p.length<4) return alert('PIN must be at least 4 characters');
+    save('pos_pin',p); $('newPin').value=''; toast('PIN updated');
+  } else if(b.id==='clearHist'){
+    if(confirm('Delete ALL bills and sales history? Export to Excel first!')){ bills=[]; save('pos_bills',[]); save('pos_counter',0); save('pos_sales',[]); cart=[]; editingNo=null; updateBadge(); renderCart(); toast('History deleted'); }
+  }
+});
+function mergeDraftLabels(){ labels = Object.assign({}, labels); Object.entries(draftLabels).forEach(([k,v])=>{ v=v.trim(); if(v) labels[k]=v; else delete labels[k]; }); }
+$('file').onchange = async e=>{
+  const f = e.target.files[0]; if(!f) return; if(needXLSX()) return;
+  const wb = XLSX.read(await f.arrayBuffer(),{type:'array'});
+  const r = parseWorkbook(wb);
+  menu = r.menu; options = r.options; save('pos_menu',{menu,options});
+  Object.assign(localLabels, r.labels); save('pos_labels',localLabels); mergeLabels();
+  $('src').textContent = '· menu: edited in Admin'; e.target.value='';
+  render(); openAdmin(); toast('Menu imported');
+};
+$('adminSave').onclick = ()=>{
+  const codes = new Set();
+  for(const m of draft){
+    m.code = String(m.code).trim(); m.name = String(m.name).trim();
+    if(!m.code) return alert('Every item needs a code');
+    if(m.code.toUpperCase()==='OPEN') return alert('The code OPEN is reserved for Open item');
+    m.variants = (m.variants||[]);
+    if(codes.has(m.code.toLowerCase())) return alert('Duplicate code: '+m.code);
+    codes.add(m.code.toLowerCase());
+  }
+  const opts = draftOpts.map(o=>({name:String(o.name).trim(),extra:Number(o.extra)||0})).filter(o=>o.name);
+  if(!opts.length) return alert('At least one meat option is required');
+  menu = JSON.parse(JSON.stringify(draft)); options = opts;
+  save('pos_menu',{menu,options});
+  localLabels = {}; Object.entries(draftLabels).forEach(([k,v])=>{ v=v.trim(); if(v) localLabels[k]=v; });
+  save('pos_labels',localLabels); mergeLabels();
+  $('src').textContent = '· menu: edited in Admin';
+  render(); closeModals(); toast('✅ Saved');
+};
+
+autoLoad();
+</script>
+</body>
+</html>
