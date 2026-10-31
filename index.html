@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>POS System</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
 <style>
 :root{--bg:#e9ecf1;--card:#ffffff;--text:#111827;--muted:#374151;--line:#b8bfcb;--ok:#2b8a3e;--accent:#e8590c;--blue:#1971c2}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#1a1d24;--text:#f3f4f6;--muted:#c4c9d3;--line:#454b57}}
@@ -235,11 +236,16 @@ function applySetupLink(){
 }
 applySetupLink();
 window.addEventListener('hashchange',()=>{ if(applySetupLink()) location.reload(); });
-let sync = load('pos_sync',null);          // {url,key} or null = local only
+const CFG = (window.POS_CONFIG && window.POS_CONFIG.syncUrl && window.POS_CONFIG.syncKey)
+  ? {url:String(window.POS_CONFIG.syncUrl).trim(), key:String(window.POS_CONFIG.syncKey).trim()} : null;
+let sync = CFG || load('pos_sync',null);
+const syncManaged = !!CFG;   // true = connection comes from config.js (same for every device)          // {url,key} or null = local only
 let outbox = load('pos_outbox',[]);        // ids of bills waiting to be pushed
 let lastPull = load('pos_lastpull',0);
 let menuDirty = load('pos_menu_dirty',false);
 let staffDirty = load('pos_staff_dirty',false);
+let sheetPin = load('pos_sheet_pin','');
+let lastReconcile = 0;
 function markStaff(){ if(!sync) return; staffDirty = true; save('pos_staff_dirty',true); kickSync(); }
 let syncBusy = false, syncErr = '';
 function newId(){ return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2,10); }
@@ -302,6 +308,7 @@ async function pullBills(){
 async function loadSheetMenu(){
   if(menuDirty) return 'dirty';
   const r = await api('menu',{},'GET');
+  if(r.pin){ sheetPin = r.pin; save('pos_sheet_pin',sheetPin); }
   if(!r.menu || !r.menu.length) return 'empty';
   menu = r.menu; if(r.options && r.options.length) options = r.options;
   fileLabels = r.labels||{}; localLabels = {}; save('pos_labels',localLabels);
@@ -315,12 +322,23 @@ async function pushMenu(){
   menuDirty = false; save('pos_menu_dirty',false);
   save('pos_menu_cache',{menu,options,labels:fileLabels});
 }
+async function reconcileBills(){   // the sheet is the single source of truth: drop bills that no longer exist there
+  const r = await api('billIds',{},'GET'); const ids = new Set(r.ids||[]);
+  const before = bills.length;
+  bills = bills.filter(b=>ids.has(b.id) || outbox.includes(b.id));
+  if(bills.length!==before){
+    if(editingId && !bills.some(b=>b.id===editingId)){ cart=[]; editingId=null; $('note').value=''; }
+    save('pos_bills',bills); updateBadge(); renderCart(); if(view==='bills') renderBills();
+  }
+}
 async function syncNow(){
   if(!sync || syncBusy) return;
   syncBusy = true;
   try{ if(menuDirty) await pushMenu();
     if(staffDirty){ await api('saveStaff',{staff},'POST'); staffDirty=false; save('pos_staff_dirty',false); }
-    await flushOutbox(); await pullBills(); syncErr=''; }
+    await flushOutbox(); await pullBills();
+    if(Date.now()-lastReconcile>60000){ await reconcileBills(); lastReconcile=Date.now(); }
+    syncErr=''; }
   catch(e){ syncErr = String((e&&e.message)||e); }
   finally{ syncBusy = false; setSyncState(); }
 }
@@ -460,6 +478,19 @@ function menuWorkbook(m,o){
   return wb;
 }
 async function autoLoad(){
+  if(sync){   // shared mode: the sheet is the only source of the menu
+    const c = load('pos_menu_cache',null);
+    if(c){ menu = c.menu; options = c.options; fileLabels = c.labels||{}; } else { menu = []; }
+    mergeLabels(); applyLang(); $('src').textContent = '· menu: loading shared menu…';
+    let src;
+    try{
+      const st = await loadSheetMenu();
+      if(st==='ok') src = 'Google Sheet';
+      else if(st==='dirty') src = 'edited in Admin (uploading…)';
+      else { if(!c){ menu = JSON.parse(JSON.stringify(DEFAULT_MENU)); options = DEFAULT_OPTIONS; } src = 'Google Sheet is empty → Admin → Push menu to sheet'; }
+    }catch(e){ src = c ? 'Google Sheet (offline copy)' : '⚠️ cannot reach the shared sheet - check internet'; }
+    $('src').textContent = '· menu: ' + src; mergeLabels(); applyLang(); return;
+  }
   let fileWb = null;
   try{
     const res = await fetch('menu.xlsx?'+Date.now());
@@ -496,6 +527,7 @@ function render(){
       const hint = hasV ? t('choose option') : (m.hasOptions ? t('choose meat') : '');
       return `<button class="item" data-code="${escH(m.code)}" style="--cc:${catColor(m.category)}"><div class="code">${escH(m.code)}</div><div class="name">${escH(m.name)}</div><div class="price">${money(price)}${hint?`<small>+ ${escH(hint)}</small>`:''}</div></button>`;
     }).join('');
+    if(!menu.length) g.innerHTML = '<div class="status" style="font-size:18px">⏳ No menu loaded yet…</div>';
     g.querySelectorAll('.item').forEach(b=>b.onclick=()=>pickItem(b.dataset.code));
   }
   renderCart();
@@ -764,7 +796,8 @@ $('btnAdmin').onclick = ()=>{
   $('pinInput').value=''; $('pinErr').textContent=''; $('pinModal').style.display='flex'; $('pinInput').focus();
 };
 function checkPin(){
-  if($('pinInput').value === String(load('pos_pin','1234'))){ adminUntil = Date.now()+10*60*1000; $('pinModal').style.display='none'; openAdmin(); }
+  const pin = (sync && sheetPin) ? sheetPin : String(load('pos_pin','1234'));
+  if($('pinInput').value === pin){ adminUntil = Date.now()+10*60*1000; $('pinModal').style.display='none'; openAdmin(); }
   else $('pinErr').textContent = 'Wrong PIN';
 }
 $('pinOk').onclick = checkPin;
@@ -779,8 +812,18 @@ function openAdmin(){
   renderAdmin(); $('adminModal').style.display='flex';
 }
 function syncSectionHtml(){
+  const tools = `<button class="btn" id="sPush">⬆️ Push menu to sheet</button>
+     <button class="btn" id="sPull">⬇️ Load menu from sheet</button>
+     <button class="btn" id="sBills">⬆️ Push all bills</button>`;
+  if(syncManaged) return `<div class="asec"><h4>☁️ Shared data (Google Sheets)</h4>
+   <div class="status" style="margin-bottom:8px">Status: <b>${escH($('syncDot').textContent)}</b>${syncErr?' · '+escH(syncErr):''}${menuDirty?' · menu waiting to upload':''}</div>
+   <div style="margin-bottom:10px">✅ The connection is set once in <b>config.js</b> on GitHub, so <b>every device uses the same menu, bills, staff names and PIN</b> automatically. Nothing to set up on each device.</div>
+   <div style="display:flex;gap:8px;flex-wrap:wrap">${tools}</div>
+   <div class="status" style="margin-top:8px">Menu is read from the sheet tabs Menu / Variants / Options / Labels (refreshes about every minute). Bills sync about every 10 seconds.</div>
+  </div>`;
   return `<div class="asec"><h4>☁️ Google Sheets sync (menu + bills in real time)</h4>
    <div class="status" style="margin-bottom:8px">Status: <b>${escH($('syncDot').textContent)}</b>${syncErr?' · '+escH(syncErr):''}${menuDirty?' · menu waiting to upload':''}</div>
+   <div class="status" style="margin-bottom:8px;color:var(--accent);font-weight:bold">This device is not using shared data. To make every device identical automatically, put the URL and Key in config.js on GitHub (see SETUP_GOOGLE_SHEETS_TH.md).</div>
    <label style="margin-top:0">Web App URL</label>
    <input type="text" value="${escH(syncDraft.url)}" data-row="sync" data-f="url" placeholder="https://script.google.com/macros/s/.../exec">
    <label>Key (Setup tab, cell B1 of your Google Sheet)</label>
@@ -788,13 +831,10 @@ function syncSectionHtml(){
    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
      <button class="btn ok" id="sSave">🔗 Save &amp; connect</button>
      <button class="btn" id="sTest">🧪 Test connection</button>
-     <button class="btn" id="sPush">⬆️ Push menu to sheet</button>
-     <button class="btn" id="sPull">⬇️ Load menu from sheet</button>
-     <button class="btn" id="sBills">⬆️ Push all bills</button>
+     ${tools}
      <button class="btn" id="sLink">📋 Copy device setup link</button>
      <button class="btn danger" id="sOff">Disconnect</button>
    </div>
-   <div class="status" style="margin-top:8px">Menu is read from the sheet (tabs Menu / Variants / Options / Labels). Every bill is written to tabs Bills and Lines. Devices refresh about every 10 seconds.</div>
   </div>`;
 }
 const SYNC_ACTIONS = {
@@ -941,11 +981,16 @@ $('adminBody').addEventListener('click',e=>{
     if(confirm('Remove the edits saved in this browser and reload menu.xlsx from GitHub?')){ localStorage.removeItem('pos_menu'); localStorage.removeItem('pos_labels'); location.reload(); }
   } else if(b.id==='setPin'){
     const p = $('newPin').value.trim(); if(p.length<4) return alert('PIN must be at least 4 characters');
-    save('pos_pin',p); $('newPin').value=''; toast('PIN updated');
+    (async()=>{ try{ if(sync){ await api('savePin',{pin:p},'POST'); sheetPin=p; save('pos_sheet_pin',p); }
+      save('pos_pin',p); $('newPin').value=''; toast('PIN updated'+(sync?' on all devices':'')); }
+      catch(e){ alert('Could not update the PIN on the sheet: '+e.message); } })();
   } else if(b.id && SYNC_ACTIONS[b.id]){ SYNC_ACTIONS[b.id]();
   } else if(b.id==='clearHist'){
-    const msg = sync ? 'Delete the bills stored on THIS device only? The Google Sheet is NOT cleared - delete those rows in the sheet yourself. Export first!' : 'Delete ALL bills and sales history? Export to Excel first!';
-    if(confirm(msg)){ bills=[]; outbox=[]; save('pos_outbox',[]); save('pos_bills',[]); save('pos_counter',0); save('pos_sales',[]); lastPull=Date.now(); save('pos_lastpull',lastPull); cart=[]; editingId=null; updateBadge(); renderCart(); toast('History deleted'); }
+    const msg = sync ? 'Delete ALL bills from the Google Sheet and from every device? This cannot be undone. Export first!' : 'Delete ALL bills and sales history? Export to Excel first!';
+    if(confirm(msg)){ (async()=>{
+      try{ if(sync) await api('clearBills',{},'POST'); }catch(e){ return alert('Could not clear the sheet: '+e.message); }
+      bills=[]; outbox=[]; save('pos_outbox',[]); save('pos_bills',[]); save('pos_counter',0); save('pos_sales',[]);
+      cart=[]; editingId=null; updateBadge(); renderCart(); toast('History deleted'); })(); }
   }
 });
 function mergeDraftLabels(){ labels = Object.assign({}, labels); Object.entries(draftLabels).forEach(([k,v])=>{ v=v.trim(); if(v) labels[k]=v; else delete labels[k]; }); }
